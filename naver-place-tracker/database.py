@@ -3,6 +3,9 @@ import os
 
 DB_PATH = os.environ.get("DB_PATH", "tracker.db")
 
+# DB 저장 폴더가 없으면 자동 생성
+os.makedirs(os.path.dirname(DB_PATH), exist_ok=True) if os.path.dirname(DB_PATH) else None
+
 async def init_db():
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("""
