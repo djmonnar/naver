@@ -1,122 +1,86 @@
 import asyncio
 import random
+import httpx
 from datetime import datetime
-from playwright.async_api import async_playwright
 import database
 
-# 네이버 플레이스 검색 시 확인할 최대 순위
 MAX_RANK = 100
+PAGE_SIZE = 20
+
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Referer": "https://map.naver.com/",
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "ko-KR,ko;q=0.9",
+    "Origin": "https://map.naver.com",
+}
+
 
 async def search_place_rank(keyword: str, target_place_id: str) -> int:
-    """
-    네이버 지도에서 키워드 검색 후 플레이스 ID의 순위 반환
-    못 찾으면 -1 반환
-    """
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(
-            headless=True,
-            args=[
-                "--no-sandbox",
-                "--disable-setuid-sandbox",
-                "--disable-blink-features=AutomationControlled",
-                "--disable-dev-shm-usage",
-            ]
-        )
-        context = await browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-            viewport={"width": 1280, "height": 900},
-            locale="ko-KR",
-        )
-        # 자동화 감지 우회
-        await context.add_init_script("""
-            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-            window.chrome = { runtime: {} };
-        """)
-        page = await context.new_page()
-        rank = -1
-        try:
-            # 네이버 지도 검색
-            search_url = f"https://map.naver.com/v5/search/{keyword}"
-            await page.goto(search_url, wait_until="networkidle", timeout=30000)
-            await asyncio.sleep(random.uniform(2, 4))
+    async with httpx.AsyncClient(headers=HEADERS, timeout=15, follow_redirects=True) as client:
+        for page in range(1, (MAX_RANK // PAGE_SIZE) + 2):
+            try:
+                url = "https://map.naver.com/v5/api/search"
+                params = {
+                    "query": keyword,
+                    "type": "all",
+                    "page": page,
+                    "displayCount": PAGE_SIZE,
+                    "lang": "ko",
+                }
+                resp = await client.get(url, params=params)
 
-            # 검색 결과 iframe 진입
-            frame = None
-            for frame_candidate in page.frames:
-                if "search" in frame_candidate.url:
-                    frame = frame_candidate
+                if resp.status_code != 200:
+                    print(f"  API 응답 오류: {resp.status_code}")
                     break
 
-            if not frame:
-                # iframe 직접 찾기
-                iframe_element = await page.query_selector("iframe#searchIframe")
-                if iframe_element:
-                    frame = await iframe_element.content_frame()
+                data = resp.json()
 
-            if not frame:
-                frame = page
+                # 결과에서 place 목록 추출
+                places = []
+                if "result" in data:
+                    result = data["result"]
+                    for key in ["place", "places", "business", "businesses"]:
+                        if key in result and result[key]:
+                            items = result[key].get("list", result[key]) if isinstance(result[key], dict) else result[key]
+                            if items:
+                                places = items
+                                break
 
-            await asyncio.sleep(random.uniform(1, 2))
-
-            # 순위 추적 - 스크롤하며 리스트 수집
-            current_rank = 0
-            found = False
-            scroll_count = 0
-            max_scrolls = 20
-
-            while scroll_count < max_scrolls and not found and current_rank < MAX_RANK:
-                # 리스트 아이템 수집 (여러 selector 시도)
-                items = await frame.query_selector_all("li.UEzoS") 
-                if not items:
-                    items = await frame.query_selector_all("li[data-laim-exp-id]")
-                if not items:
-                    items = await frame.query_selector_all(".place_bluelink")
-
-                for item in items:
-                    # place ID 추출 시도
-                    item_id = await item.get_attribute("data-laim-exp-id") or ""
-                    
-                    # href에서 ID 추출
-                    link = await item.query_selector("a")
-                    href = ""
-                    if link:
-                        href = await link.get_attribute("href") or ""
-                    
-                    # onclick이나 다른 속성에서 ID 확인
-                    onclick = await item.get_attribute("onclick") or ""
-                    
-                    if (target_place_id in item_id or 
-                        target_place_id in href or 
-                        target_place_id in onclick):
-                        current_rank += 1
-                        rank = current_rank
-                        found = True
-                        break
-                    
-                    current_rank += 1
-
-                if found:
+                if not places:
+                    # 전체 응답 텍스트에서 ID 탐색 (백업)
+                    if target_place_id in resp.text:
+                        before = resp.text[:resp.text.find(target_place_id)]
+                        approx_rank = before.count('"id"') + (page - 1) * PAGE_SIZE + 1
+                        print(f"  📍 텍스트 탐지: [{keyword}] 약 {approx_rank}위")
+                        return min(approx_rank, MAX_RANK)
                     break
 
-                # 스크롤 다운
-                try:
-                    await frame.evaluate("window.scrollBy(0, 800)")
-                except:
-                    await page.evaluate("window.scrollBy(0, 800)")
+                base_rank = (page - 1) * PAGE_SIZE
+                for i, place in enumerate(places):
+                    rank = base_rank + i + 1
+                    pid = str(place.get("id", ""))
+                    pid2 = str(place.get("placeId", ""))
+                    pid3 = str(place.get("poiId", ""))
+
+                    if target_place_id in (pid, pid2, pid3):
+                        name = place.get("name", place.get("placeName", ""))
+                        print(f"  ✅ 발견! [{keyword}] {name} → {rank}위")
+                        return rank
+
+                    if rank >= MAX_RANK:
+                        return -1
+
                 await asyncio.sleep(random.uniform(0.5, 1.5))
-                scroll_count += 1
 
-        except Exception as e:
-            print(f"크롤링 오류 [{keyword}]: {e}")
-            rank = -1
-        finally:
-            await browser.close()
+            except Exception as e:
+                print(f"  오류 [{keyword}] 페이지 {page}: {e}")
+                break
 
-        return rank
+    return -1
 
 
 async def run_daily_check():
-    """매일 실행되는 전체 순위 체크"""
     today = datetime.now().strftime("%Y-%m-%d")
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 순위 체크 시작")
 
@@ -140,8 +104,7 @@ async def run_daily_check():
             rank_str = f"{rank}위" if rank > 0 else "100위 밖"
             print(f"  결과: [{keyword}] {place_name} → {rank_str}")
 
-            # 요청 간 딜레이 (차단 방지)
-            await asyncio.sleep(random.uniform(3, 7))
+            await asyncio.sleep(random.uniform(2, 4))
 
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 순위 체크 완료")
 
