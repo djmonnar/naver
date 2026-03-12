@@ -1,3 +1,4 @@
+
 import asyncio
 import random
 from datetime import datetime
@@ -31,13 +32,18 @@ async def search_place_rank(keyword: str, target_place_id: str) -> int:
         rank = -1
 
         try:
-            search_url = f"https://map.naver.com/v5/search/{keyword}"
-            await page.goto(search_url, wait_until="networkidle", timeout=40000)
-            await asyncio.sleep(random.uniform(2, 4))
+            # 새 URL 구조 /p/ 사용
+            import urllib.parse
+            encoded_keyword = urllib.parse.quote(keyword)
+            search_url = f"https://map.naver.com/p/search/{encoded_keyword}"
+            print(f"  접속 URL: {search_url}")
 
-            # searchIframe 찾기
+            await page.goto(search_url, wait_until="networkidle", timeout=40000)
+            await asyncio.sleep(random.uniform(3, 5))
+
+            # searchIframe 찾기 (최대 15초 대기)
             frame = None
-            for _ in range(10):
+            for _ in range(15):
                 for f in page.frames:
                     if "search" in f.url and f.url != page.url:
                         frame = f
@@ -52,51 +58,82 @@ async def search_place_rank(keyword: str, target_place_id: str) -> int:
                     frame = await iframe_el.content_frame()
 
             if not frame:
+                print(f"  iframe 못찾음, page로 대체")
                 frame = page
 
+            print(f"  iframe 확인: {frame.url}")
             await asyncio.sleep(2)
 
             current_rank = 0
             found = False
             scroll_count = 0
+            prev_height = 0
 
-            while scroll_count < 25 and not found and current_rank < MAX_RANK:
-                # 여러 selector 시도
-                items = []
-                for selector in ["li.UEzoS", "li[data-laim-exp-id]", ".place_bluelink", "li.VLTHu"]:
-                    items = await frame.query_selector_all(selector)
-                    if items:
-                        break
+            while scroll_count < 30 and not found and current_rank < MAX_RANK:
+                # 페이지 전체 HTML에서 place ID 검색
+                try:
+                    content = await frame.content()
+                    if target_place_id in content:
+                        # 몇 번째인지 계산
+                        # 리스트 아이템 찾기
+                        items = []
+                        for selector in [
+                            "li.UEzoS", 
+                            "li[data-laim-exp-id]",
+                            "li.VLTHu",
+                            ".place_bluelink",
+                            "li.CHC5F",
+                        ]:
+                            items = await frame.query_selector_all(selector)
+                            if items:
+                                break
 
-                for item in items:
-                    # ID 추출 시도
-                    item_id = await item.get_attribute("data-laim-exp-id") or ""
-                    inner_html = await item.inner_html()
+                        if items:
+                            for i, item in enumerate(items):
+                                item_html = await item.inner_html()
+                                if target_place_id in item_html:
+                                    rank = i + 1
+                                    found = True
+                                    print(f"  ✅ 발견! {rank}위 (selector로)")
+                                    break
+                        
+                        if not found:
+                            # selector 못찾으면 텍스트 위치로 추정
+                            idx = content.find(target_place_id)
+                            before = content[:idx]
+                            # 앞에 나온 place entry 개수 세기
+                            count = before.count('data-laim-exp-id')
+                            if count == 0:
+                                count = before.count('/entry/place/')
+                            rank = max(1, count)
+                            found = True
+                            print(f"  📍 텍스트 탐지: 약 {rank}위")
 
-                    if target_place_id in item_id or target_place_id in inner_html:
-                        current_rank += 1
-                        rank = current_rank
-                        found = True
-                        break
-
-                    current_rank += 1
-                    if current_rank >= MAX_RANK:
-                        break
+                except Exception as e:
+                    print(f"  content 검색 오류: {e}")
 
                 if found:
                     break
 
                 # 스크롤
                 try:
-                    await frame.evaluate("window.scrollBy(0, 600)")
+                    curr_height = await frame.evaluate("document.body.scrollHeight")
+                    if curr_height == prev_height and scroll_count > 5:
+                        print(f"  스크롤 끝 도달, 탐색 종료")
+                        break
+                    prev_height = curr_height
+                    await frame.evaluate("window.scrollBy(0, 800)")
                 except:
-                    await page.evaluate("window.scrollBy(0, 600)")
+                    await page.keyboard.press("PageDown")
 
-                await asyncio.sleep(random.uniform(0.8, 1.5))
+                await asyncio.sleep(random.uniform(1, 2))
                 scroll_count += 1
+                
+                if scroll_count % 5 == 0:
+                    print(f"  스크롤 {scroll_count}회, 현재 {current_rank}위까지 탐색")
 
         except Exception as e:
-            print(f"크롤링 오류 [{keyword}]: {e}")
+            print(f"  크롤링 오류 [{keyword}]: {e}")
             rank = -1
         finally:
             await browser.close()
