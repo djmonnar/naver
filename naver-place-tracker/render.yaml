@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: place-tracker
+    runtime: docker
+    plan: free
+    envVars:
+      - key: PORT
+        value: 8000
+      - key: DB_PATH
+        value: /app/data/tracker.db
+    disk:
+      name: tracker-data
+      mountPath: /app/data
+      sizeGB: 1

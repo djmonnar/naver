@@ -15,6 +15,20 @@ templates = Jinja2Templates(directory="templates")
 
 scheduler = AsyncIOScheduler(timezone="Asia/Seoul")
 
+async def keep_alive():
+    """Render 무료 플랜 슬립 방지 - 14분마다 자기 자신에게 핑"""
+    try:
+        port = int(os.environ.get("PORT", 8000))
+        async with httpx.AsyncClient() as client:
+            await client.get(f"http://localhost:{port}/ping", timeout=10)
+        print("💓 Keep-alive ping 전송")
+    except Exception as e:
+        print(f"Keep-alive 실패 (무시): {e}")
+
+@app.get("/ping")
+async def ping():
+    return {"status": "ok"}
+
 @app.on_event("startup")
 async def startup():
     await database.init_db()
@@ -25,8 +39,16 @@ async def startup():
         id="daily_check",
         replace_existing=True
     )
+    # 14분마다 슬립 방지 핑
+    scheduler.add_job(
+        keep_alive,
+        "interval",
+        minutes=14,
+        id="keep_alive",
+        replace_existing=True
+    )
     scheduler.start()
-    print("스케줄러 시작 - 매일 오전 9시 자동 체크")
+    print("스케줄러 시작 - 매일 오전 9시 자동 체크 + 슬립 방지 활성화")
 
 @app.on_event("shutdown")
 async def shutdown():
