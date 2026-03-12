@@ -1,6 +1,8 @@
 import asyncio
 import random
 import urllib.parse
+import re
+import json
 from datetime import datetime
 from playwright.async_api import async_playwright
 import database
@@ -39,7 +41,6 @@ async def search_place_rank(keyword: str, target_place_id: str) -> int:
             await page.goto(search_url, wait_until="networkidle", timeout=40000)
             await asyncio.sleep(random.uniform(3, 5))
 
-            # iframe 찾기
             frame = None
             for _ in range(15):
                 for f in page.frames:
@@ -60,9 +61,8 @@ async def search_place_rank(keyword: str, target_place_id: str) -> int:
             print(f"  iframe: {frame.url}")
             await asyncio.sleep(2)
 
-            # 스크롤로 전체 로딩 후 한번에 분석
             prev_height = 0
-            for scroll in range(30):
+            for scroll in range(20):
                 try:
                     curr_height = await frame.evaluate("document.body.scrollHeight")
                     if curr_height == prev_height and scroll > 3:
@@ -73,58 +73,79 @@ async def search_place_rank(keyword: str, target_place_id: str) -> int:
                 except:
                     break
 
-                # 중간에 발견되면 스크롤 멈춤
-                content = await frame.content()
-                if target_place_id in content:
-                    print(f"  ID 발견! 분석 시작")
-                    break
+            content = await frame.content()
+            pattern = r'"(?:RestaurantListSummary|PlaceListSummary|CafeListSummary|HotelListSummary):(\d+):\d+"'
+            matches = re.findall(pattern, content)
 
-            # 최종 아이템 목록 분석
-            items = []
-            for selector in ["li.UEzoS", "li[data-laim-exp-id]", "li.VLTHu", "li.CHC5F"]:
-                items = await frame.query_selector_all(selector)
-                if items:
-                    print(f"  selector '{selector}' 로 {len(items)}개 항목 발견")
-                    break
+            if matches:
+                print(f"  JSON에서 {len(matches)}개 플레이스 발견")
+                real_rank = 0
+                seen = []
+                for place_id in matches:
+                    if place_id in seen:
+                        continue
+                    seen.append(place_id)
 
-            if not items:
-                print(f"  아이템 없음 - 100위 밖 처리")
-                await browser.close()
-                return -1
+                    ad_pattern = f'"id":"{place_id}".*?"isAd":true'
+                    is_ad = bool(re.search(ad_pattern, content))
 
-            real_rank = 0
-            for item in items:
-                item_html = await item.inner_html()
+                    if is_ad:
+                        print(f"  ⚡ 광고 건너뜀: {place_id}")
+                        continue
 
-                # 광고 확인
-                is_ad = False
-                ad_spans = await item.query_selector_all("span.place_blind")
-                for span in ad_spans:
-                    text = await span.inner_text()
-                    if "광고" in text:
-                        is_ad = True
+                    real_rank += 1
+                    print(f"  {real_rank}위: {place_id}")
+
+                    if place_id == target_place_id:
+                        rank = real_rank
+                        print(f"  ✅ 발견! 실제 {rank}위")
                         break
 
-                if is_ad:
-                    print(f"  ⚡ 광고 건너뜀")
-                    continue
-
-                real_rank += 1
-
-                if target_place_id in item_html:
-                    rank = real_rank
-                    print(f"  ✅ 발견! 광고 제외 실제 {rank}위")
-                    break
-
-                if real_rank >= MAX_RANK:
-                    print(f"  100위 밖으로 탐색 종료")
-                    break
+                    if real_rank >= MAX_RANK:
+                        break
 
             if rank == -1:
-                print(f"  끝까지 못찾음 → 100위 밖")
+                print(f"  JSON 방법 실패, li 태그 방법 시도")
+                items = []
+                for selector in ["li.UEzoS", "li[data-laim-exp-id]", "li.VLTHu", "li.CHC5F"]:
+                    items = await frame.query_selector_all(selector)
+                    if items:
+                        print(f"  {len(items)}개 li 항목 발견")
+                        break
+
+                real_rank = 0
+                for item in items:
+                    item_html = await item.inner_html()
+
+                    is_ad = False
+                    ad_spans = await item.query_selector_all("span.place_blind")
+                    for span in ad_spans:
+                        text = await span.inner_text()
+                        if "광고" in text:
+                            is_ad = True
+                            break
+
+                    if is_ad:
+                        print(f"  ⚡ 광고 건너뜀")
+                        continue
+
+                    real_rank += 1
+
+                    if target_place_id in item_html:
+                        rank = real_rank
+                        print(f"  ✅ li에서 발견! {rank}위")
+                        break
+
+                    if real_rank >= MAX_RANK:
+                        break
+
+            if rank == -1:
+                print(f"  못찾음 → 100위 밖")
 
         except Exception as e:
             print(f"  크롤링 오류 [{keyword}]: {e}")
+            import traceback
+            traceback.print_exc()
             rank = -1
         finally:
             await browser.close()
@@ -160,6 +181,9 @@ async def run_daily_check():
 
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 순위 체크 완료")
 
+
+if __name__ == "__main__":
+    asyncio.run(run_daily_check())
 
 if __name__ == "__main__":
     asyncio.run(run_daily_check())
