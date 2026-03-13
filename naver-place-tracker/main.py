@@ -32,14 +32,12 @@ async def ping():
 @app.on_event("startup")
 async def startup():
     await database.init_db()
-    # 매일 오전 9시 자동 체크
     scheduler.add_job(
         crawler.run_daily_check,
         CronTrigger(hour=9, minute=0, timezone="Asia/Seoul"),
         id="daily_check",
         replace_existing=True
     )
-    # 14분마다 슬립 방지 핑
     scheduler.add_job(
         keep_alive,
         "interval",
@@ -62,7 +60,6 @@ async def dashboard(request: Request):
     latest = await database.get_latest_rankings()
     rankings_30 = await database.get_rankings(days=30)
 
-    # 차트용 데이터 가공
     chart_data = {}
     for row in rankings_30:
         key = f"{row['place_name'] or row['place_id']} | {row['keyword']}"
@@ -118,6 +115,67 @@ async def check_now(background_tasks: BackgroundTasks):
 async def check_status():
     latest = await database.get_latest_rankings()
     return JSONResponse({"latest": latest})
+
+# ─── 고객용 리포트 ──────────────────────────────────────────
+@app.get("/report", response_class=HTMLResponse)
+async def report(request: Request):
+    places = await database.get_places()
+    keywords = await database.get_keywords()
+    rankings_30 = await database.get_rankings(days=30)
+    today = datetime.now().strftime("%Y년 %m월 %d일")
+
+    chart_labels_set = sorted(set(r['date'] for r in rankings_30))
+    chart_datasets = []
+    for place in places:
+        for kw in keywords:
+            label = f"{place['place_name']} | {kw['keyword']}"
+            data_map = {r['date']: r['rank'] for r in rankings_30
+                        if r['place_id'] == place['place_id'] and r['keyword'] == kw['keyword']}
+            data = [data_map.get(d) for d in chart_labels_set]
+            chart_datasets.append({"label": label, "data": data})
+
+    summary = []
+    for place in places:
+        for kw in keywords:
+            rows = [r for r in rankings_30
+                    if r['place_id'] == place['place_id'] and r['keyword'] == kw['keyword']]
+            rows_sorted = sorted(rows, key=lambda x: x['date'], reverse=True)
+            today_rank = rows_sorted[0]['rank'] if rows_sorted else -1
+            prev_rank = rows_sorted[1]['rank'] if len(rows_sorted) > 1 else None
+            week_rank = rows_sorted[6]['rank'] if len(rows_sorted) > 6 else None
+            change_day = (today_rank - prev_rank) if (prev_rank and today_rank > 0) else None
+            change_week = (today_rank - week_rank) if (week_rank and today_rank > 0) else None
+            summary = [
+                {"label": "오늘 순위", "rank": today_rank, "change": None},
+                {"label": "어제 순위", "rank": prev_rank or -1, "change": change_day},
+                {"label": "7일 전", "rank": week_rank or -1, "change": change_week},
+            ]
+
+    history = []
+    for i, row in enumerate(rankings_30[:20]):
+        change = None
+        next_rows = [r for r in rankings_30
+                     if r['place_id'] == row['place_id']
+                     and r['keyword'] == row['keyword']
+                     and r['date'] < row['date']]
+        if next_rows:
+            prev = sorted(next_rows, key=lambda x: x['date'], reverse=True)[0]
+            if row['rank'] > 0 and prev['rank'] > 0:
+                change = row['rank'] - prev['rank']
+        history.append({**row, "change": change})
+
+    return templates.TemplateResponse("report.html", {
+        "request": request,
+        "places": places,
+        "keywords": keywords,
+        "today": today,
+        "summary": summary,
+        "history": history,
+        "chart_data": {
+            "labels": [l[5:] for l in chart_labels_set],
+            "datasets": chart_datasets
+        },
+    })
 
 # ─── API ─────────────────────────────────────────────────
 @app.get("/api/rankings")
