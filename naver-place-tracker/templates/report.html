@@ -6,7 +6,7 @@
 <title>네이버 플레이스 순위 리포트</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700;900&family=DM+Serif+Display&display=swap');
+  @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700;900&display=swap');
 
   :root {
     --bg: #f8f7f4;
@@ -19,8 +19,6 @@
     --green-light: #e6f7f1;
     --red: #e53935;
     --red-light: #fdecea;
-    --yellow: #f5a623;
-    --yellow-light: #fef8ec;
     --navy: #1a237e;
     --accent: #2563eb;
   }
@@ -35,10 +33,7 @@
     padding: 40px 20px;
   }
 
-  .report-wrap {
-    max-width: 860px;
-    margin: 0 auto;
-  }
+  .report-wrap { max-width: 1100px; margin: 0 auto; }
 
   .report-header {
     background: var(--navy);
@@ -48,243 +43,97 @@
     justify-content: space-between;
     align-items: flex-end;
   }
-
   .report-header .logo-area h1 {
-    font-size: 13px;
-    font-weight: 400;
+    font-size: 13px; font-weight: 400;
     color: rgba(255,255,255,0.6);
-    letter-spacing: 0.15em;
-    text-transform: uppercase;
-    margin-bottom: 10px;
+    letter-spacing: 0.15em; text-transform: uppercase; margin-bottom: 10px;
   }
-
   .report-header .logo-area h2 {
-    font-size: 28px;
-    font-weight: 700;
-    color: #fff;
-    line-height: 1.2;
+    font-size: 28px; font-weight: 700; color: #fff; line-height: 1.2;
   }
-
-  .report-header .logo-area h2 span {
-    color: #60a5fa;
-  }
-
-  .report-header .date-area {
-    text-align: right;
-  }
-
-  .report-header .date-area .date-label {
-    font-size: 12px;
-    color: rgba(255,255,255,0.5);
-    margin-bottom: 4px;
-  }
-
-  .report-header .date-area .date-value {
-    font-size: 16px;
-    font-weight: 600;
-    color: #fff;
-  }
+  .report-header .logo-area h2 span { color: #60a5fa; }
+  .report-header .date-area { text-align: right; }
+  .report-header .date-area .date-label { font-size: 12px; color: rgba(255,255,255,0.5); margin-bottom: 4px; }
+  .report-header .date-area .date-value { font-size: 16px; font-weight: 600; color: #fff; }
 
   .business-bar {
-    background: #fff;
-    border: 1px solid var(--border);
-    border-top: none;
-    padding: 20px 48px;
-    display: flex;
-    align-items: center;
-    gap: 32px;
+    background: #fff; border: 1px solid var(--border); border-top: none;
+    padding: 20px 48px; display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
   }
-
-  .business-bar .biz-name {
-    font-size: 20px;
-    font-weight: 700;
-  }
-
+  .business-bar .biz-name { font-size: 20px; font-weight: 700; }
   .business-bar .keyword-tag {
-    background: var(--accent);
-    color: #fff;
-    padding: 4px 14px;
-    border-radius: 100px;
-    font-size: 13px;
-    font-weight: 500;
+    background: var(--accent); color: #fff;
+    padding: 4px 14px; border-radius: 100px; font-size: 13px; font-weight: 500;
   }
-
-  .business-bar .divider {
-    width: 1px;
-    height: 24px;
-    background: var(--border);
-  }
-
-  .business-bar .check-info {
-    font-size: 13px;
-    color: var(--text-mid);
-    margin-left: auto;
-  }
+  .business-bar .divider { width: 1px; height: 24px; background: var(--border); }
+  .business-bar .check-info { font-size: 13px; color: var(--text-mid); margin-left: auto; }
 
   .report-body {
-    background: #fff;
-    border: 1px solid var(--border);
-    border-top: none;
-    border-radius: 0 0 16px 16px;
-    padding: 40px 48px;
+    background: #fff; border: 1px solid var(--border); border-top: none;
+    border-radius: 0 0 16px 16px; padding: 40px 48px;
   }
 
-  .rank-highlight {
-    display: grid;
-    grid-template-columns: 1fr 1fr 1fr;
-    gap: 20px;
-    margin-bottom: 40px;
-  }
-
-  .rank-card {
-    border: 1.5px solid var(--border);
-    border-radius: 12px;
-    padding: 24px;
-    text-align: center;
-  }
-
-  .rank-card.main {
-    border-color: var(--accent);
-    background: linear-gradient(135deg, #eff6ff, #fff);
-  }
-
-  .rank-card .card-label {
-    font-size: 12px;
-    font-weight: 500;
-    color: var(--text-light);
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    margin-bottom: 12px;
-  }
-
-  .rank-card.main .card-label {
-    color: var(--accent);
-  }
-
-  .rank-card .rank-num {
-    font-size: 52px;
-    font-weight: 900;
-    color: var(--text);
-    line-height: 1;
-    margin-bottom: 4px;
-  }
-
-  .rank-card.main .rank-num {
-    color: var(--accent);
-  }
-
-  .rank-card .rank-unit {
-    font-size: 18px;
-    font-weight: 500;
-    color: var(--text-mid);
-  }
-
+  .rank-highlight { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; margin-bottom: 40px; }
+  .rank-card { border: 1.5px solid var(--border); border-radius: 12px; padding: 24px; text-align: center; }
+  .rank-card.main { border-color: var(--accent); background: linear-gradient(135deg, #eff6ff, #fff); }
+  .rank-card .card-label { font-size: 12px; font-weight: 500; color: var(--text-light); letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 12px; }
+  .rank-card.main .card-label { color: var(--accent); }
+  .rank-card .rank-num { font-size: 52px; font-weight: 900; color: var(--text); line-height: 1; margin-bottom: 4px; }
+  .rank-card.main .rank-num { color: var(--accent); }
+  .rank-card .rank-unit { font-size: 18px; font-weight: 500; color: var(--text-mid); }
   .rank-card .rank-change {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    margin-top: 12px;
-    padding: 4px 10px;
-    border-radius: 100px;
-    font-size: 13px;
-    font-weight: 600;
+    display: inline-flex; align-items: center; gap: 4px;
+    margin-top: 12px; padding: 4px 10px; border-radius: 100px; font-size: 13px; font-weight: 600;
   }
-
   .rank-change.up { background: var(--green-light); color: var(--green); }
   .rank-change.down { background: var(--red-light); color: var(--red); }
   .rank-change.same { background: #f0f0f0; color: var(--text-mid); }
 
   .section-title {
-    font-size: 14px;
-    font-weight: 700;
-    color: var(--text-mid);
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    margin-bottom: 20px;
-    padding-bottom: 10px;
-    border-bottom: 1px solid var(--border);
+    font-size: 14px; font-weight: 700; color: var(--text-mid);
+    letter-spacing: 0.1em; text-transform: uppercase;
+    margin-bottom: 20px; padding-bottom: 10px; border-bottom: 1px solid var(--border);
   }
 
-  .chart-section {
-    margin-bottom: 40px;
-  }
+  .chart-section { margin-bottom: 40px; }
+  .chart-wrap { background: var(--bg); border-radius: 12px; padding: 24px; height: 260px; }
 
-  .chart-wrap {
-    background: var(--bg);
-    border-radius: 12px;
-    padding: 24px;
-    height: 260px;
+  /* 달력 */
+  .calendar-wrap { display: flex; flex-direction: column; gap: 20px; }
+  .cal-block { border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+  .cal-header {
+    background: var(--navy); padding: 12px 20px;
+    display: flex; align-items: center; gap: 12px;
   }
-
-  .rank-table {
-    width: 100%;
-    border-collapse: collapse;
+  .cal-header .cal-place { font-size: 15px; font-weight: 700; color: #fff; }
+  .cal-header .cal-keyword {
+    background: rgba(255,255,255,0.2); color: #fff;
+    padding: 3px 10px; border-radius: 100px; font-size: 12px;
   }
-
-  .rank-table th {
-    font-size: 12px;
-    font-weight: 600;
-    color: var(--text-light);
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    padding: 10px 16px;
-    background: var(--bg);
-    text-align: left;
-    border-bottom: 1px solid var(--border);
+  .cal-grid {
+    display: flex; overflow-x: auto; padding: 16px;
+    gap: 6px; background: var(--bg);
   }
-
-  .rank-table td {
-    padding: 14px 16px;
-    font-size: 14px;
-    border-bottom: 1px solid var(--border);
-    vertical-align: middle;
+  .cal-cell {
+    flex: 0 0 58px; border-radius: 8px;
+    padding: 8px 4px; text-align: center;
+    border: 1px solid var(--border);
+    background: #fff;
   }
-
-  .rank-table tr:last-child td {
-    border-bottom: none;
-  }
-
-  .rank-table tr:hover td {
-    background: var(--bg);
-  }
-
-  .rank-badge {
-    display: inline-block;
-    font-weight: 700;
-    font-size: 15px;
-    color: var(--accent);
-    min-width: 40px;
-  }
-
-  .change-pill {
-    display: inline-flex;
-    align-items: center;
-    gap: 3px;
-    padding: 3px 8px;
-    border-radius: 100px;
-    font-size: 12px;
-    font-weight: 600;
-  }
+  .cal-date { font-size: 10px; color: var(--text-light); margin-bottom: 5px; font-weight: 500; }
+  .cal-rank { font-size: 16px; font-weight: 900; color: var(--text); margin-bottom: 3px; }
+  .no-data .cal-rank { color: #ddd; }
+  .cal-change { font-size: 10px; font-weight: 700; }
+  .ch-up { color: var(--green); }
+  .ch-down { color: var(--red); }
+  .ch-same { color: var(--text-light); }
 
   .report-footer {
-    margin-top: 32px;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding-top: 24px;
-    border-top: 1px solid var(--border);
+    margin-top: 32px; display: flex; justify-content: space-between; align-items: center;
+    padding-top: 24px; border-top: 1px solid var(--border);
   }
-
-  .report-footer .footer-note {
-    font-size: 12px;
-    color: var(--text-light);
-  }
-
-  .report-footer .footer-brand {
-    font-size: 12px;
-    font-weight: 600;
-    color: var(--text-mid);
-  }
+  .report-footer .footer-note { font-size: 12px; color: var(--text-light); }
+  .report-footer .footer-brand { font-size: 12px; font-weight: 600; color: var(--text-mid); }
 
   @media print {
     body { padding: 0; background: #fff; }
@@ -348,45 +197,30 @@
     </div>
 
     <div>
-      <div class="section-title">최근 순위 기록</div>
-      <table class="rank-table">
-        <thead>
-          <tr>
-            <th>날짜</th>
-            <th>업체명</th>
-            <th>키워드</th>
-            <th>순위</th>
-            <th>변동</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for row in history %}
-          <tr>
-            <td>{{ row.checked_date }}</td>
-            <td>{{ row.place_name }}</td>
-            <td><span class="keyword-tag" style="font-size:12px">{{ row.keyword }}</span></td>
-            <td>
-              <span class="rank-badge">
-                {% if row.rank > 0 %}{{ row.rank }}위{% else %}100위↓{% endif %}
-              </span>
-            </td>
-            <td>
-              {% if row.change is not none %}
-                {% if row.change < 0 %}
-                <span class="change-pill" style="background:#e6f7f1;color:#00b67a">▲ {{ row.change | abs }}</span>
-                {% elif row.change > 0 %}
-                <span class="change-pill" style="background:#fdecea;color:#e53935">▼ {{ row.change }}</span>
-                {% else %}
-                <span class="change-pill" style="background:#f0f0f0;color:#999">–</span>
-                {% endif %}
-              {% else %}
-              <span style="color:#ccc">–</span>
+      <div class="section-title">키워드별 순위 달력 (최근 30일)</div>
+      <div class="calendar-wrap">
+        {% for kw_data in calendar %}
+        <div class="cal-block">
+          <div class="cal-header">
+            <span class="cal-place">{{ kw_data.place_name }}</span>
+            <span class="cal-keyword"># {{ kw_data.keyword }}</span>
+          </div>
+          <div class="cal-grid">
+            {% for day in kw_data.days %}
+            <div class="cal-cell {% if day.rank <= 0 %}no-data{% endif %}">
+              <div class="cal-date">{{ day.date }}</div>
+              <div class="cal-rank">{% if day.rank > 0 %}{{ day.rank }}{% else %}–{% endif %}</div>
+              {% if day.change is not none and day.rank > 0 %}
+              <div class="cal-change {% if day.change < 0 %}ch-up{% elif day.change > 0 %}ch-down{% else %}ch-same{% endif %}">
+                {% if day.change < 0 %}▲{{ day.change | abs }}{% elif day.change > 0 %}▼{{ day.change }}{% else %}–{% endif %}
+              </div>
               {% endif %}
-            </td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
+            </div>
+            {% endfor %}
+          </div>
+        </div>
+        {% endfor %}
+      </div>
     </div>
 
     <div class="report-footer">
@@ -407,58 +241,33 @@ new Chart(ctx, {
     datasets: chartData.datasets.map((ds, i) => ({
       label: ds.label,
       data: ds.data,
-      borderColor: ['#2563eb', '#00b67a', '#f5a623', '#e53935'][i % 4],
-      backgroundColor: ['rgba(37,99,235,0.06)', 'rgba(0,182,122,0.06)'][i % 2],
-      borderWidth: 2.5,
-      pointRadius: 5,
-      pointHoverRadius: 7,
-      pointBackgroundColor: '#fff',
-      pointBorderWidth: 2.5,
-      tension: 0.3,
-      fill: true,
+      borderColor: ['#2563eb','#00b67a','#f5a623','#e53935'][i % 4],
+      backgroundColor: ['rgba(37,99,235,0.06)','rgba(0,182,122,0.06)','rgba(245,166,35,0.06)','rgba(229,57,53,0.06)'][i % 4],
+      borderWidth: 2.5, pointRadius: 5, pointHoverRadius: 7,
+      pointBackgroundColor: '#fff', pointBorderWidth: 2.5,
+      tension: 0.3, fill: true,
     }))
   },
   options: {
-    responsive: true,
-    maintainAspectRatio: false,
+    responsive: true, maintainAspectRatio: false,
     plugins: {
-      legend: {
-        labels: {
-          font: { family: 'Noto Sans KR', size: 12 },
-          color: '#666',
-          usePointStyle: true,
-        }
-      },
+      legend: { labels: { font: { family: 'Noto Sans KR', size: 12 }, color: '#666', usePointStyle: true } },
       tooltip: {
         backgroundColor: '#1a1a1a',
         titleFont: { family: 'Noto Sans KR', size: 12 },
         bodyFont: { family: 'Noto Sans KR', size: 13 },
-        callbacks: {
-          label: ctx => ` ${ctx.parsed.y}위`
-        }
+        callbacks: { label: ctx => ` ${ctx.parsed.y}위` }
       }
     },
     scales: {
       y: {
-        reverse: true,
-        min: 1,
-        ticks: {
-          stepSize: 5,
-          color: '#999',
-          font: { family: 'Noto Sans KR', size: 11 },
-          callback: v => v + '위'
-        },
-        grid: { color: '#f0ede8' },
-        border: { display: false }
+        reverse: true, min: 1,
+        ticks: { stepSize: 5, color: '#999', font: { family: 'Noto Sans KR', size: 11 }, callback: v => v + '위' },
+        grid: { color: '#f0ede8' }, border: { display: false }
       },
       x: {
-        ticks: {
-          color: '#999',
-          font: { family: 'Noto Sans KR', size: 11 },
-          maxRotation: 0,
-        },
-        grid: { display: false },
-        border: { display: false }
+        ticks: { color: '#999', font: { family: 'Noto Sans KR', size: 11 }, maxRotation: 0, maxTicksLimit: 10 },
+        grid: { display: false }, border: { display: false }
       }
     }
   }
