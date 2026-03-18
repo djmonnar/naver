@@ -1,468 +1,183 @@
-<!DOCTYPE html>
-<html lang="ko">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>네이버 플레이스 순위 리포트</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
-<style>
-  @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700;900&family=DM+Serif+Display&display=swap');
+from fastapi import FastAPI, Request, Form, BackgroundTasks
+from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
+from fastapi.templating import Jinja2Templates
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
+from datetime import datetime, timedelta
+import asyncio
+import os
 
-  :root {
-    --bg: #f8f7f4;
-    --white: #ffffff;
-    --border: #e8e4dc;
-    --text: #1a1a1a;
-    --text-mid: #666666;
-    --text-light: #999999;
-    --green: #00b67a;
-    --green-light: #e6f7f1;
-    --red: #e53935;
-    --red-light: #fdecea;
-    --yellow: #f5a623;
-    --yellow-light: #fef8ec;
-    --navy: #1a237e;
-    --accent: #2563eb;
-  }
+import database
+import crawler
 
-  * { box-sizing: border-box; margin: 0; padding: 0; }
+app = FastAPI(title="네이버 플레이스 순위 트래커")
+templates = Jinja2Templates(directory="templates")
+scheduler = AsyncIOScheduler(timezone="Asia/Seoul")
 
-  body {
-    background: var(--bg);
-    color: var(--text);
-    font-family: 'Noto Sans KR', sans-serif;
-    min-height: 100vh;
-    padding: 40px 20px;
-  }
+async def keep_alive():
+    try:
+        import httpx
+        port = int(os.environ.get("PORT", 8000))
+        async with httpx.AsyncClient() as client:
+            await client.get(f"http://localhost:{port}/ping", timeout=10)
+        print("💓 Keep-alive ping 전송")
+    except Exception as e:
+        print(f"Keep-alive 실패 (무시): {e}")
 
-  .report-wrap {
-    max-width: 860px;
-    margin: 0 auto;
-  }
+@app.get("/ping")
+async def ping():
+    return {"status": "ok"}
 
-  .report-header {
-    background: var(--navy);
-    border-radius: 16px 16px 0 0;
-    padding: 36px 48px;
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-end;
-  }
+@app.on_event("startup")
+async def startup():
+    await database.init_db()
+    scheduler.add_job(crawler.run_daily_check, CronTrigger(hour=9, minute=0, timezone="Asia/Seoul"), id="daily_check", replace_existing=True)
+    scheduler.add_job(keep_alive, "interval", minutes=14, id="keep_alive", replace_existing=True)
+    scheduler.start()
+    print("스케줄러 시작 - 매일 오전 9시 자동 체크 + 슬립 방지 활성화")
 
-  .report-header .logo-area h1 {
-    font-size: 13px;
-    font-weight: 400;
-    color: rgba(255,255,255,0.6);
-    letter-spacing: 0.15em;
-    text-transform: uppercase;
-    margin-bottom: 10px;
-  }
+@app.on_event("shutdown")
+async def shutdown():
+    scheduler.shutdown()
 
-  .report-header .logo-area h2 {
-    font-size: 28px;
-    font-weight: 700;
-    color: #fff;
-    line-height: 1.2;
-  }
+@app.get("/", response_class=HTMLResponse)
+async def dashboard(request: Request):
+    places = await database.get_places()
+    keywords = await database.get_keywords()
+    latest = await database.get_latest_rankings()
+    rankings_30 = await database.get_rankings(days=30)
 
-  .report-header .logo-area h2 span {
-    color: #60a5fa;
-  }
+    chart_data = {}
+    for row in rankings_30:
+        key = f"{row['place_name'] or row['place_id']} | {row['keyword']}"
+        if key not in chart_data:
+            chart_data[key] = {"dates": [], "ranks": [], "color": None}
+        if row['date'] not in chart_data[key]["dates"]:
+            chart_data[key]["dates"].append(row['date'])
+            chart_data[key]["ranks"].append(row['rank'] if row['rank'] > 0 else None)
 
-  .report-header .date-area {
-    text-align: right;
-  }
+    return templates.TemplateResponse("dashboard.html", {
+        "request": request,
+        "places": places,
+        "keywords": keywords,
+        "latest": latest,
+        "chart_data": chart_data,
+        "now": datetime.now().strftime("%Y-%m-%d %H:%M"),
+    })
 
-  .report-header .date-area .date-label {
-    font-size: 12px;
-    color: rgba(255,255,255,0.5);
-    margin-bottom: 4px;
-  }
+@app.post("/places/add")
+async def add_place(place_id: str = Form(...), place_name: str = Form(...)):
+    place_id = place_id.strip()
+    place_name = place_name.strip()
+    if place_id:
+        await database.add_place(place_id, place_name)
+    return RedirectResponse("/", status_code=303)
 
-  .report-header .date-area .date-value {
-    font-size: 16px;
-    font-weight: 600;
-    color: #fff;
-  }
+@app.post("/places/delete")
+async def del_place(place_id: str = Form(...)):
+    await database.delete_place(place_id)
+    return RedirectResponse("/", status_code=303)
 
-  .business-bar {
-    background: #fff;
-    border: 1px solid var(--border);
-    border-top: none;
-    padding: 20px 48px;
-    display: flex;
-    align-items: center;
-    gap: 32px;
-  }
+@app.post("/keywords/add")
+async def add_keyword(keyword: str = Form(...)):
+    keyword = keyword.strip()
+    if keyword:
+        await database.add_keyword(keyword)
+    return RedirectResponse("/", status_code=303)
 
-  .business-bar .biz-name {
-    font-size: 20px;
-    font-weight: 700;
-  }
+@app.post("/keywords/delete")
+async def del_keyword(keyword: str = Form(...)):
+    await database.delete_keyword(keyword)
+    return RedirectResponse("/", status_code=303)
 
-  .business-bar .keyword-tag {
-    background: var(--accent);
-    color: #fff;
-    padding: 4px 14px;
-    border-radius: 100px;
-    font-size: 13px;
-    font-weight: 500;
-  }
+@app.post("/check/now")
+async def check_now(background_tasks: BackgroundTasks):
+    background_tasks.add_task(crawler.run_daily_check)
+    return JSONResponse({"status": "started", "message": "순위 체크를 시작했습니다."})
 
-  .business-bar .divider {
-    width: 1px;
-    height: 24px;
-    background: var(--border);
-  }
+@app.get("/check/status")
+async def check_status():
+    latest = await database.get_latest_rankings()
+    return JSONResponse({"latest": latest})
 
-  .business-bar .check-info {
-    font-size: 13px;
-    color: var(--text-mid);
-    margin-left: auto;
-  }
+@app.get("/report", response_class=HTMLResponse)
+async def report(request: Request):
+    places = await database.get_places()
+    keywords = await database.get_keywords()
+    rankings_30 = await database.get_rankings(days=30)
+    today = datetime.now().strftime("%Y년 %m월 %d일")
 
-  .report-body {
-    background: #fff;
-    border: 1px solid var(--border);
-    border-top: none;
-    border-radius: 0 0 16px 16px;
-    padding: 40px 48px;
-  }
+    chart_labels_set = sorted(set(r['date'] for r in rankings_30))
+    chart_datasets = []
+    for place in places:
+        for kw in keywords:
+            label = f"{place['place_name']} | {kw['keyword']}"
+            data_map = {r['date']: r['rank'] for r in rankings_30
+                        if r['place_id'] == place['place_id'] and r['keyword'] == kw['keyword']}
+            data = [data_map.get(d) for d in chart_labels_set]
+            chart_datasets.append({"label": label, "data": data})
 
-  .rank-highlight {
-    display: grid;
-    grid-template-columns: 1fr 1fr 1fr;
-    gap: 20px;
-    margin-bottom: 40px;
-  }
+    summary = []
+    for place in places:
+        for kw in keywords:
+            rows = [r for r in rankings_30
+                    if r['place_id'] == place['place_id'] and r['keyword'] == kw['keyword']]
+            rows_sorted = sorted(rows, key=lambda x: x['date'], reverse=True)
+            today_rank = rows_sorted[0]['rank'] if rows_sorted else -1
+            prev_rank = rows_sorted[1]['rank'] if len(rows_sorted) > 1 else None
+            week_rank = rows_sorted[6]['rank'] if len(rows_sorted) > 6 else None
+            change_day = (today_rank - prev_rank) if (prev_rank and today_rank > 0) else None
+            change_week = (today_rank - week_rank) if (week_rank and today_rank > 0) else None
+            summary = [
+                {"label": "오늘 순위", "rank": today_rank, "change": None},
+                {"label": "어제 순위", "rank": prev_rank or -1, "change": change_day},
+                {"label": "7일 전", "rank": week_rank or -1, "change": change_week},
+            ]
 
-  .rank-card {
-    border: 1.5px solid var(--border);
-    border-radius: 12px;
-    padding: 24px;
-    text-align: center;
-  }
+    # 달력 데이터 (최근 30일)
+    today_dt = datetime.now()
+    date_range = [(today_dt - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(29, -1, -1)]
 
-  .rank-card.main {
-    border-color: var(--accent);
-    background: linear-gradient(135deg, #eff6ff, #fff);
-  }
+    calendar = []
+    for place in places:
+        for kw in keywords:
+            rows = [r for r in rankings_30
+                    if r['place_id'] == place['place_id'] and r['keyword'] == kw['keyword']]
+            data_map = {r['date']: r['rank'] for r in rows}
+            days = []
+            for d in date_range:
+                rank = data_map.get(d, -1)
+                prev_d = (datetime.strptime(d, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
+                prev_rank = data_map.get(prev_d)
+                change = None
+                if prev_rank and rank > 0:
+                    change = rank - prev_rank
+                days.append({"date": d[5:], "rank": rank, "change": change})
+            calendar.append({
+                "place_name": place['place_name'],
+                "keyword": kw['keyword'],
+                "days": days
+            })
 
-  .rank-card .card-label {
-    font-size: 12px;
-    font-weight: 500;
-    color: var(--text-light);
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    margin-bottom: 12px;
-  }
-
-  .rank-card.main .card-label {
-    color: var(--accent);
-  }
-
-  .rank-card .rank-num {
-    font-size: 52px;
-    font-weight: 900;
-    color: var(--text);
-    line-height: 1;
-    margin-bottom: 4px;
-  }
-
-  .rank-card.main .rank-num {
-    color: var(--accent);
-  }
-
-  .rank-card .rank-unit {
-    font-size: 18px;
-    font-weight: 500;
-    color: var(--text-mid);
-  }
-
-  .rank-card .rank-change {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    margin-top: 12px;
-    padding: 4px 10px;
-    border-radius: 100px;
-    font-size: 13px;
-    font-weight: 600;
-  }
-
-  .rank-change.up { background: var(--green-light); color: var(--green); }
-  .rank-change.down { background: var(--red-light); color: var(--red); }
-  .rank-change.same { background: #f0f0f0; color: var(--text-mid); }
-
-  .section-title {
-    font-size: 14px;
-    font-weight: 700;
-    color: var(--text-mid);
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    margin-bottom: 20px;
-    padding-bottom: 10px;
-    border-bottom: 1px solid var(--border);
-  }
-
-  .chart-section {
-    margin-bottom: 40px;
-  }
-
-  .chart-wrap {
-    background: var(--bg);
-    border-radius: 12px;
-    padding: 24px;
-    height: 260px;
-  }
-
-  .rank-table {
-    width: 100%;
-    border-collapse: collapse;
-  }
-
-  .rank-table th {
-    font-size: 12px;
-    font-weight: 600;
-    color: var(--text-light);
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    padding: 10px 16px;
-    background: var(--bg);
-    text-align: left;
-    border-bottom: 1px solid var(--border);
-  }
-
-  .rank-table td {
-    padding: 14px 16px;
-    font-size: 14px;
-    border-bottom: 1px solid var(--border);
-    vertical-align: middle;
-  }
-
-  .rank-table tr:last-child td {
-    border-bottom: none;
-  }
-
-  .rank-table tr:hover td {
-    background: var(--bg);
-  }
-
-  .rank-badge {
-    display: inline-block;
-    font-weight: 700;
-    font-size: 15px;
-    color: var(--accent);
-    min-width: 40px;
-  }
-
-  .change-pill {
-    display: inline-flex;
-    align-items: center;
-    gap: 3px;
-    padding: 3px 8px;
-    border-radius: 100px;
-    font-size: 12px;
-    font-weight: 600;
-  }
-
-  .report-footer {
-    margin-top: 32px;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding-top: 24px;
-    border-top: 1px solid var(--border);
-  }
-
-  .report-footer .footer-note {
-    font-size: 12px;
-    color: var(--text-light);
-  }
-
-  .report-footer .footer-brand {
-    font-size: 12px;
-    font-weight: 600;
-    color: var(--text-mid);
-  }
-
-  @media print {
-    body { padding: 0; background: #fff; }
-    .report-wrap { max-width: 100%; }
-  }
-</style>
-</head>
-<body>
-<div class="report-wrap">
-
-  <div class="report-header">
-    <div class="logo-area">
-      <h1>Naver Place Report</h1>
-      <h2>네이버 플레이스<br><span>순위 분석 리포트</span></h2>
-    </div>
-    <div class="date-area">
-      <div class="date-label">리포트 기준일</div>
-      <div class="date-value">{{ today }}</div>
-    </div>
-  </div>
-
-  <div class="business-bar">
-    {% for place in places %}
-    <div class="biz-name">{{ place.place_name }}</div>
-    {% endfor %}
-    <div class="divider"></div>
-    {% for keyword in keywords %}
-    <span class="keyword-tag"># {{ keyword.keyword }}</span>
-    {% endfor %}
-    <div class="check-info">매일 오전 9시 자동 업데이트</div>
-  </div>
-
-  <div class="report-body">
-
-    <div class="rank-highlight">
-      {% for item in summary %}
-      <div class="rank-card {% if loop.first %}main{% endif %}">
-        <div class="card-label">{{ item.label }}</div>
-        <div>
-          <span class="rank-num">{{ item.rank if item.rank > 0 else '–' }}</span>
-          <span class="rank-unit">{% if item.rank > 0 %}위{% endif %}</span>
-        </div>
-        {% if item.change is not none %}
-          {% if item.change < 0 %}
-          <div class="rank-change up">▲ {{ item.change | abs }}위 상승</div>
-          {% elif item.change > 0 %}
-          <div class="rank-change down">▼ {{ item.change }}위 하락</div>
-          {% else %}
-          <div class="rank-change same">— 변동 없음</div>
-          {% endif %}
-        {% endif %}
-      </div>
-      {% endfor %}
-    </div>
-
-    <div class="chart-section">
-      <div class="section-title">순위 변화 추이 (30일)</div>
-      <div class="chart-wrap">
-        <canvas id="rankChart"></canvas>
-      </div>
-    </div>
-
-    <div>
-      <div class="section-title">최근 순위 기록</div>
-      <table class="rank-table">
-        <thead>
-          <tr>
-            <th>날짜</th>
-            <th>업체명</th>
-            <th>키워드</th>
-            <th>순위</th>
-            <th>변동</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for row in history %}
-          <tr>
-            <td>{{ row.checked_date }}</td>
-            <td>{{ row.place_name }}</td>
-            <td><span class="keyword-tag" style="font-size:12px">{{ row.keyword }}</span></td>
-            <td>
-              <span class="rank-badge">
-                {% if row.rank > 0 %}{{ row.rank }}위{% else %}100위↓{% endif %}
-              </span>
-            </td>
-            <td>
-              {% if row.change is not none %}
-                {% if row.change < 0 %}
-                <span class="change-pill" style="background:#e6f7f1;color:#00b67a">▲ {{ row.change | abs }}</span>
-                {% elif row.change > 0 %}
-                <span class="change-pill" style="background:#fdecea;color:#e53935">▼ {{ row.change }}</span>
-                {% else %}
-                <span class="change-pill" style="background:#f0f0f0;color:#999">–</span>
-                {% endif %}
-              {% else %}
-              <span style="color:#ccc">–</span>
-              {% endif %}
-            </td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-
-    <div class="report-footer">
-      <div class="footer-note">* 광고 제외 실제 순위 기준 · 매일 오전 9시 자동 체크</div>
-      <div class="footer-brand">네이버 플레이스 순위 트래커</div>
-    </div>
-
-  </div>
-</div>
-
-<script>
-const chartData = {{ chart_data | tojson }};
-const ctx = document.getElementById('rankChart').getContext('2d');
-new Chart(ctx, {
-  type: 'line',
-  data: {
-    labels: chartData.labels,
-    datasets: chartData.datasets.map((ds, i) => ({
-      label: ds.label,
-      data: ds.data,
-      borderColor: ['#2563eb', '#00b67a', '#f5a623', '#e53935'][i % 4],
-      backgroundColor: ['rgba(37,99,235,0.06)', 'rgba(0,182,122,0.06)'][i % 2],
-      borderWidth: 2.5,
-      pointRadius: 5,
-      pointHoverRadius: 7,
-      pointBackgroundColor: '#fff',
-      pointBorderWidth: 2.5,
-      tension: 0.3,
-      fill: true,
-    }))
-  },
-  options: {
-    responsive: true,
-    maintainAspectRatio: false,
-    plugins: {
-      legend: {
-        labels: {
-          font: { family: 'Noto Sans KR', size: 12 },
-          color: '#666',
-          usePointStyle: true,
-        }
-      },
-      tooltip: {
-        backgroundColor: '#1a1a1a',
-        titleFont: { family: 'Noto Sans KR', size: 12 },
-        bodyFont: { family: 'Noto Sans KR', size: 13 },
-        callbacks: {
-          label: ctx => ` ${ctx.parsed.y}위`
-        }
-      }
-    },
-    scales: {
-      y: {
-        reverse: true,
-        min: 1,
-        ticks: {
-          stepSize: 5,
-          color: '#999',
-          font: { family: 'Noto Sans KR', size: 11 },
-          callback: v => v + '위'
+    return templates.TemplateResponse("report.html", {
+        "request": request,
+        "places": places,
+        "keywords": keywords,
+        "today": today,
+        "summary": summary,
+        "calendar": calendar,
+        "chart_data": {
+            "labels": [l[5:] for l in chart_labels_set],
+            "datasets": chart_datasets
         },
-        grid: { color: '#f0ede8' },
-        border: { display: false }
-      },
-      x: {
-        ticks: {
-          color: '#999',
-          font: { family: 'Noto Sans KR', size: 11 },
-          maxRotation: 0,
-        },
-        grid: { display: false },
-        border: { display: false }
-      }
-    }
-  }
-});
-</script>
-</body>
-</html>
+    })
+
+@app.get("/api/rankings")
+async def api_rankings(place_id: str = None, keyword: str = None, days: int = 30):
+    data = await database.get_rankings(place_id=place_id, keyword=keyword, days=days)
+    return JSONResponse(data)
+
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=False)
