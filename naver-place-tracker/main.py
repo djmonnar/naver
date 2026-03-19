@@ -107,6 +107,7 @@ async def report(request: Request):
     rankings_30 = await database.get_rankings(days=30)
     today = datetime.now().strftime("%Y년 %m월 %d일")
 
+    # 차트 데이터
     chart_labels_set = sorted(set(r['date'] for r in rankings_30))
     chart_datasets = []
     for place in places:
@@ -117,42 +118,47 @@ async def report(request: Request):
             data = [data_map.get(d) for d in chart_labels_set]
             chart_datasets.append({"label": label, "data": data})
 
-    summary = []
-    for place in places:
-        for kw in keywords:
+    # 키워드별 요약 카드
+    summary_by_kw = {}
+    for kw in keywords:
+        kw_name = kw['keyword']
+        for place in places:
             rows = [r for r in rankings_30
-                    if r['place_id'] == place['place_id'] and r['keyword'] == kw['keyword']]
+                    if r['place_id'] == place['place_id'] and r['keyword'] == kw_name]
             rows_sorted = sorted(rows, key=lambda x: x['date'], reverse=True)
             today_rank = rows_sorted[0]['rank'] if rows_sorted else -1
             prev_rank = rows_sorted[1]['rank'] if len(rows_sorted) > 1 else None
             week_rank = rows_sorted[6]['rank'] if len(rows_sorted) > 6 else None
             change_day = (today_rank - prev_rank) if (prev_rank and today_rank > 0) else None
             change_week = (today_rank - week_rank) if (week_rank and today_rank > 0) else None
-            summary = [
+            summary_by_kw[kw_name] = [
                 {"label": "오늘 순위", "rank": today_rank, "change": None},
                 {"label": "어제 순위", "rank": prev_rank or -1, "change": change_day},
-                {"label": "7일 전", "rank": week_rank or -1, "change": change_week},
+                {"label": "7일 전",   "rank": week_rank or -1, "change": change_week},
             ]
 
-    # 달력 데이터 (최근 30일)
-    today_dt = datetime.now()
-    date_range = [(today_dt - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(29, -1, -1)]
-
+    # 달력: 데이터 있는 날만
     calendar = []
     for place in places:
         for kw in keywords:
             rows = [r for r in rankings_30
-                    if r['place_id'] == place['place_id'] and r['keyword'] == kw['keyword']]
-            data_map = {r['date']: r['rank'] for r in rows}
+                    if r['place_id'] == place['place_id'] and r['keyword'] == kw['keyword']
+                    and r['rank'] > 0]
+            seen = {}
+            for r in sorted(rows, key=lambda x: x['date']):
+                seen[r['date']] = r['rank']
+
+            if not seen:
+                continue
+
+            dates_sorted = sorted(seen.keys())
             days = []
-            for d in date_range:
-                rank = data_map.get(d, -1)
-                prev_d = (datetime.strptime(d, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
-                prev_rank = data_map.get(prev_d)
-                change = None
-                if prev_rank and rank > 0:
-                    change = rank - prev_rank
+            for i, d in enumerate(dates_sorted):
+                rank = seen[d]
+                prev_rank = seen[dates_sorted[i-1]] if i > 0 else None
+                change = (rank - prev_rank) if prev_rank else None
                 days.append({"date": d[5:], "rank": rank, "change": change})
+
             calendar.append({
                 "place_name": place['place_name'],
                 "keyword": kw['keyword'],
@@ -164,7 +170,7 @@ async def report(request: Request):
         "places": places,
         "keywords": keywords,
         "today": today,
-        "summary": summary,
+        "summary_by_kw": summary_by_kw,
         "calendar": calendar,
         "chart_data": {
             "labels": [l[5:] for l in chart_labels_set],
