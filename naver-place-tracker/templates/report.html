@@ -10,7 +10,6 @@
 
   :root {
     --bg: #f8f7f4;
-    --white: #ffffff;
     --border: #e8e4dc;
     --text: #1a1a1a;
     --text-mid: #666666;
@@ -36,21 +35,14 @@
   .report-wrap { max-width: 1100px; margin: 0 auto; }
 
   .report-header {
-    background: var(--navy);
-    border-radius: 16px 16px 0 0;
-    padding: 36px 48px;
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-end;
+    background: var(--navy); border-radius: 16px 16px 0 0;
+    padding: 36px 48px; display: flex; justify-content: space-between; align-items: flex-end;
   }
   .report-header .logo-area h1 {
-    font-size: 13px; font-weight: 400;
-    color: rgba(255,255,255,0.6);
+    font-size: 13px; font-weight: 400; color: rgba(255,255,255,0.6);
     letter-spacing: 0.15em; text-transform: uppercase; margin-bottom: 10px;
   }
-  .report-header .logo-area h2 {
-    font-size: 28px; font-weight: 700; color: #fff; line-height: 1.2;
-  }
+  .report-header .logo-area h2 { font-size: 28px; font-weight: 700; color: #fff; line-height: 1.2; }
   .report-header .logo-area h2 span { color: #60a5fa; }
   .report-header .date-area { text-align: right; }
   .report-header .date-area .date-label { font-size: 12px; color: rgba(255,255,255,0.5); margin-bottom: 4px; }
@@ -58,14 +50,16 @@
 
   .business-bar {
     background: #fff; border: 1px solid var(--border); border-top: none;
-    padding: 20px 48px; display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+    padding: 20px 48px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
   }
-  .business-bar .biz-name { font-size: 20px; font-weight: 700; }
-  .business-bar .keyword-tag {
+  .business-bar .biz-name { font-size: 20px; font-weight: 700; margin-right: 6px; }
+  .keyword-tag {
     background: var(--accent); color: #fff;
-    padding: 4px 14px; border-radius: 100px; font-size: 13px; font-weight: 500;
+    padding: 5px 14px; border-radius: 100px; font-size: 13px; font-weight: 500;
+    cursor: pointer; border: 2px solid transparent; transition: all 0.15s;
   }
-  .business-bar .divider { width: 1px; height: 24px; background: var(--border); }
+  .keyword-tag:hover { opacity: 0.85; }
+  .keyword-tag.active { background: #fff; color: var(--accent); border-color: var(--accent); }
   .business-bar .check-info { font-size: 13px; color: var(--text-mid); margin-left: auto; }
 
   .report-body {
@@ -98,7 +92,6 @@
   .chart-section { margin-bottom: 40px; }
   .chart-wrap { background: var(--bg); border-radius: 12px; padding: 24px; height: 260px; }
 
-  /* 달력 */
   .calendar-wrap { display: flex; flex-direction: column; gap: 20px; }
   .cal-block { border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
   .cal-header {
@@ -117,12 +110,10 @@
   .cal-cell {
     flex: 0 0 58px; border-radius: 8px;
     padding: 8px 4px; text-align: center;
-    border: 1px solid var(--border);
-    background: #fff;
+    border: 1px solid var(--border); background: #fff;
   }
   .cal-date { font-size: 10px; color: var(--text-light); margin-bottom: 5px; font-weight: 500; }
   .cal-rank { font-size: 16px; font-weight: 900; color: var(--text); margin-bottom: 3px; }
-  .no-data .cal-rank { color: #ddd; }
   .cal-change { font-size: 10px; font-weight: 700; }
   .ch-up { color: var(--green); }
   .ch-down { color: var(--red); }
@@ -159,32 +150,38 @@
     {% for place in places %}
     <div class="biz-name">{{ place.place_name }}</div>
     {% endfor %}
-    <div class="divider"></div>
     {% for keyword in keywords %}
-    <span class="keyword-tag"># {{ keyword.keyword }}</span>
+    <span class="keyword-tag {% if loop.first %}active{% endif %}"
+          onclick="switchKeyword('{{ keyword.keyword }}', this)">
+      # {{ keyword.keyword }}
+    </span>
     {% endfor %}
     <div class="check-info">매일 오전 9시 자동 업데이트</div>
   </div>
 
   <div class="report-body">
 
-    <div class="rank-highlight">
-      {% for item in summary %}
-      <div class="rank-card {% if loop.first %}main{% endif %}">
-        <div class="card-label">{{ item.label }}</div>
-        <div>
-          <span class="rank-num">{{ item.rank if item.rank > 0 else '–' }}</span>
-          <span class="rank-unit">{% if item.rank > 0 %}위{% endif %}</span>
-        </div>
-        {% if item.change is not none %}
-          {% if item.change < 0 %}
-          <div class="rank-change up">▲ {{ item.change | abs }}위 상승</div>
-          {% elif item.change > 0 %}
-          <div class="rank-change down">▼ {{ item.change }}위 하락</div>
-          {% else %}
-          <div class="rank-change same">— 변동 없음</div>
+    <div class="rank-highlight" id="rank-cards">
+      {% for kw, data in summary_by_kw.items() %}
+      <div class="rank-kw-group" data-kw="{{ kw }}" style="display:{% if loop.first %}contents{% else %}none{% endif %}">
+        {% for item in data %}
+        <div class="rank-card {% if loop.first %}main{% endif %}">
+          <div class="card-label">{{ item.label }}</div>
+          <div>
+            <span class="rank-num">{{ item.rank if item.rank > 0 else '–' }}</span>
+            <span class="rank-unit">{% if item.rank > 0 %}위{% endif %}</span>
+          </div>
+          {% if item.change is not none %}
+            {% if item.change < 0 %}
+            <div class="rank-change up">▲ {{ item.change | abs }}위 상승</div>
+            {% elif item.change > 0 %}
+            <div class="rank-change down">▼ {{ item.change }}위 하락</div>
+            {% else %}
+            <div class="rank-change same">— 변동 없음</div>
+            {% endif %}
           {% endif %}
-        {% endif %}
+        </div>
+        {% endfor %}
       </div>
       {% endfor %}
     </div>
@@ -197,7 +194,7 @@
     </div>
 
     <div>
-      <div class="section-title">키워드별 순위 달력 (최근 30일)</div>
+      <div class="section-title">키워드별 순위 달력</div>
       <div class="calendar-wrap">
         {% for kw_data in calendar %}
         <div class="cal-block">
@@ -207,10 +204,10 @@
           </div>
           <div class="cal-grid">
             {% for day in kw_data.days %}
-            <div class="cal-cell {% if day.rank <= 0 %}no-data{% endif %}">
+            <div class="cal-cell">
               <div class="cal-date">{{ day.date }}</div>
-              <div class="cal-rank">{% if day.rank > 0 %}{{ day.rank }}{% else %}–{% endif %}</div>
-              {% if day.change is not none and day.rank > 0 %}
+              <div class="cal-rank">{{ day.rank }}</div>
+              {% if day.change is not none %}
               <div class="cal-change {% if day.change < 0 %}ch-up{% elif day.change > 0 %}ch-down{% else %}ch-same{% endif %}">
                 {% if day.change < 0 %}▲{{ day.change | abs }}{% elif day.change > 0 %}▼{{ day.change }}{% else %}–{% endif %}
               </div>
@@ -232,6 +229,14 @@
 </div>
 
 <script>
+function switchKeyword(kw, el) {
+  document.querySelectorAll('.keyword-tag').forEach(t => t.classList.remove('active'));
+  el.classList.add('active');
+  document.querySelectorAll('.rank-kw-group').forEach(g => {
+    g.style.display = g.dataset.kw === kw ? 'contents' : 'none';
+  });
+}
+
 const chartData = {{ chart_data | tojson }};
 const ctx = document.getElementById('rankChart').getContext('2d');
 new Chart(ctx, {
