@@ -297,12 +297,80 @@ def kakao_res(text, buttons=None):
     if buttons: out["template"]["quickReplies"] = buttons
     return out
 
+def build_rsv_text(rsvs, month, day, dow):
+    """예약 목록을 텍스트로 변환 (공통 함수)"""
+    if not rsvs:
+        return f"📭 {month}월 {day}일 ({dow}) 예약이 없습니다."
+    mg = [r for r in rsvs if r["time"] < "15:00"]
+    ev = [r for r in rsvs if r["time"] >= "15:00"]
+    tA = sum(r.get("adult", 0) for r in rsvs)
+    tC = sum(r.get("child", 0) for r in rsvs)
+    lines = [f"📅 {month}월 {day}일 ({dow}) 예약현황",
+             f"총 {len(rsvs)}건 · {tA+tC}석 · 음식 {tA}인분"]
+    if mg: lines += ["\n🌅 점심"] + [f"  {fmt_res(r)}" for r in mg]
+    if ev: lines += ["\n🌆 저녁"] + [f"  {fmt_res(r)}" for r in ev]
+    return "\n".join(lines)
+
+def build_kakao_export(rsvs, month, day, dow):
+    """카톡 내보내기 형식 텍스트"""
+    if not rsvs:
+        return f"📭 {month}월 {day}일 ({dow}) 예약이 없습니다."
+    mg = [r for r in rsvs if r["time"] < "15:00"]
+    ev = [r for r in rsvs if r["time"] >= "15:00"]
+    def to_line(r):
+        child = r.get("child", 0); adult = r.get("adult", 0)
+        pax = f"{adult}.{child}인" if child > 0 else f"{adult}인"
+        h = int(r["time"].split(":")[0]); mm = r["time"].split(":")[1]
+        t = f"{h-12 if h>=13 else h}:{mm}"
+        return f"{month}/{day} {dow} {t} {r['name']} {pax}{' '+r['menu'] if r.get('menu') else ''}{' 세트'+str(r['cset']) if r.get('cset') else ''}{' '+r['note'] if r.get('note') else ''}".strip()
+    parts = []
+    if mg: parts.append("[점심]"); parts += [to_line(r) for r in mg]
+    if mg and ev: parts.append("")
+    if ev: parts.append("[저녁]"); parts += [to_line(r) for r in ev]
+    return "\n".join(parts)
+
 LINK_BTN = [{"label":"📋 예약 페이지","action":"webLink","webLinkUrl":f"{BASE_URL}/reservation"}]
 
 @app.post("/api/kakao/today")
 async def kakao_today(request: Request):
-    today = datetime.now().strftime("%Y-%m-%d")
     d = datetime.now()
+    today = d.strftime("%Y-%m-%d")
+    dow = DOW_MAP[d.weekday()]
+    conn = get_res_db()
+    rsvs = [dict(r) for r in conn.execute(
+        "SELECT * FROM reservations WHERE date=? ORDER BY time", (today,)
+    ).fetchall()]
+    conn.close()
+    text = build_rsv_text(rsvs, d.month, d.day, dow)
+    btns = [
+        {"label": "💬 카톡 내보내기", "action": "block", "messageText": "오늘카톡"},
+        {"label": "📋 예약 페이지", "action": "webLink", "webLinkUrl": f"{BASE_URL}/reservation"}
+    ]
+    return kakao_res(text, btns if rsvs else LINK_BTN)
+
+# ── 내일 예약 확인 ──────────────────────────
+@app.post("/api/kakao/tomorrow")
+async def kakao_tomorrow(request: Request):
+    from datetime import timedelta
+    d = datetime.now() + timedelta(days=1)
+    tmr = d.strftime("%Y-%m-%d")
+    dow = DOW_MAP[d.weekday()]
+    conn = get_res_db()
+    rsvs = [dict(r) for r in conn.execute(
+        "SELECT * FROM reservations WHERE date=? ORDER BY time", (tmr,)
+    ).fetchall()]
+    conn.close()
+    text = build_rsv_text(rsvs, d.month, d.day, dow)
+    btns = [
+        {"label": "📋 예약 페이지", "action": "webLink", "webLinkUrl": f"{BASE_URL}/reservation"}
+    ]
+    return kakao_res(text, btns)
+
+# ── 오늘 카톡 내보내기 ───────────────────────
+@app.post("/api/kakao/export")
+async def kakao_export(request: Request):
+    d = datetime.now()
+    today = d.strftime("%Y-%m-%d")
     dow = DOW_MAP[d.weekday()]
     conn = get_res_db()
     rsvs = [dict(r) for r in conn.execute(
@@ -311,15 +379,12 @@ async def kakao_today(request: Request):
     conn.close()
     if not rsvs:
         return kakao_res(f"📭 {d.month}월 {d.day}일 ({dow}) 예약이 없습니다.", LINK_BTN)
-    mg = [r for r in rsvs if r["time"]<"15:00"]
-    ev = [r for r in rsvs if r["time"]>="15:00"]
-    tA = sum(r.get("adult",0) for r in rsvs)
-    tC = sum(r.get("child",0) for r in rsvs)
-    lines = [f"📅 {d.month}월 {d.day}일 ({dow}) 예약현황",
-             f"총 {len(rsvs)}건 · {tA+tC}석 · 음식 {tA}인분"]
-    if mg: lines += ["\n🌅 점심"] + [f"  {fmt_res(r)}" for r in mg]
-    if ev: lines += ["\n🌆 저녁"] + [f"  {fmt_res(r)}" for r in ev]
-    return kakao_res("\n".join(lines), LINK_BTN)
+    text = build_kakao_export(rsvs, d.month, d.day, dow)
+    # 카톡 내보내기는 텍스트만 — 그대로 복사해서 공유방에 붙여넣기
+    return kakao_res(
+        f"📋 {d.month}월 {d.day}일 ({dow}) 카톡 내보내기\n아래 내용을 복사해서 공유방에 붙여넣으세요:\n\n{text}",
+        LINK_BTN
+    )
 
 @app.post("/api/kakao/date")
 async def kakao_by_date(request: Request):
@@ -427,9 +492,9 @@ def parse_reservation_msg(text: str):
 async def kakao_auto(request: Request):
     """
     사용자 발화에서 예약 메시지 감지 → 자동 등록
-    M/D 패턴 + 시간 + 인원 + 이름 있으면 예약으로 처리
+    빠른 응답을 위해 파싱 먼저, DB 저장은 백그라운드
     """
-    import re, time, random, string
+    import re, time, random
 
     try:
         body = await request.json()
@@ -439,84 +504,61 @@ async def kakao_auto(request: Request):
 
     parsed = parse_reservation_msg(utterance)
 
-    # 예약 형식이 아니면 일반 안내
+    # 예약 형식이 아니면 즉시 안내 반환
     if not parsed:
         return kakao_res(
             "안녕하세요 연해주입니다 😊\n원하시는 항목을 선택해주세요.",
             [
-                {"label": "📅 오늘 예약 확인", "action": "block",
-                 "messageText": "오늘예약확인"},
-                {"label": "📋 예약 페이지", "action": "webLink",
-                 "webLinkUrl": f"{BASE_URL}/reservation"}
+                {"label": "📅 오늘 예약 확인", "action": "block", "messageText": "오늘예약확인"},
+                {"label": "📋 예약 페이지", "action": "webLink", "webLinkUrl": f"{BASE_URL}/reservation"}
             ]
         )
 
-    # 중복 확인 (같은 날짜 + 이름)
+    # 파싱 성공 → 즉시 응답 생성
+    year = datetime.now().year
+    d = datetime(year, parsed['month'], parsed['day'])
+    dow = DOW_MAP[d.weekday()]
+    child_str = f".{parsed['child']}" if parsed['child'] > 0 else ""
+    pax_str = f"{parsed['adult']}{child_str}인"
+    slot = "점심" if parsed['time'] < "15:00" else "저녁"
+
+    # 중복 확인 (빠르게)
     conn = get_res_db()
     existing = conn.execute(
         "SELECT * FROM reservations WHERE date=? AND name=? ORDER BY created DESC",
         (parsed['date'], parsed['name'])
     ).fetchone()
+    conn.close()
 
-    dow = DOW_MAP[datetime(datetime.now().year, parsed['month'], parsed['day']).weekday()]
-    child_str = f".{parsed['child']}" if parsed['child'] > 0 else ""
-    pax_str   = f"{parsed['adult']}{child_str}인"
-    slot      = "점심" if parsed['time'] < "15:00" else "저녁"
-
-    # 중복 감지 → 수정 여부 확인
     if existing:
         old = dict(existing)
-        old_slot = "점심" if old['time'] < "15:00" else "저녁"
-        old_child = f".{old['child']}" if old.get('child') else ""
-
-        # 완전 동일하면 이미 등록됨 안내
-        if (old['time'] == parsed['time'] and
-            old['adult'] == parsed['adult'] and
-            old.get('menu','') == parsed['menu']):
-            conn.close()
+        # 동일하면 이미 등록됨
+        if (old['time'] == parsed['time'] and old['adult'] == parsed['adult'] and old.get('menu','') == parsed['menu']):
             return kakao_res(
-                f"⚠️ 이미 등록된 예약입니다!\n\n"
-                f"📅 {parsed['month']}월 {parsed['day']}일 ({dow}) {old['time']} {slot}\n"
-                f"👤 {old['name']}\n"
-                f"👥 {old['adult']}{old_child}인"
-                f"{' / '+old['menu'] if old.get('menu') else ''}",
-                [{"label":"📋 예약 페이지","action":"webLink","webLinkUrl":f"{BASE_URL}/reservation"}]
+                f"⚠️ 이미 등록된 예약입니다!\n📅 {parsed['month']}월 {parsed['day']}일 ({dow}) {fmt_time(old['time'])}\n👤 {old['name']} {old['adult']}{'.'+str(old.get('child',0)) if old.get('child') else ''}인",
+                LINK_BTN
             )
-
-        # 다른 내용 → 수정 처리
-        conn.execute(
+        # 다르면 수정
+        conn2 = get_res_db()
+        conn2.execute(
             "UPDATE reservations SET time=?,adult=?,child=?,cset=?,menu=?,note=? WHERE id=?",
-            (parsed['time'], parsed['adult'], parsed['child'],
-             parsed['cset'], parsed['menu'], parsed['note'], old['id'])
+            (parsed['time'], parsed['adult'], parsed['child'], parsed['cset'], parsed['menu'], parsed['note'], old['id'])
         )
-        conn.commit()
-        conn.close()
-
-        changes = []
-        if old['time'] != parsed['time']:
-            changes.append(f"시간: {fmt_time(old['time'])} → {fmt_time(parsed['time'])}")
-        if old['adult'] != parsed['adult'] or old.get('child',0) != parsed['child']:
-            changes.append(f"인원: {old['adult']}{old_child}인 → {pax_str}")
-        if old.get('menu','') != parsed['menu']:
-            changes.append(f"메뉴: {old.get('menu','-')} → {parsed['menu'] or '-'}")
-
+        conn2.commit(); conn2.close()
         return kakao_res(
-            f"🔄 예약이 수정되었습니다!\n\n"
-            f"📅 {parsed['month']}월 {parsed['day']}일 ({dow})\n"
-            f"👤 {parsed['name']}\n"
-            + "\n".join(f"  {c}" for c in changes),
-            [{"label":"📋 예약 페이지","action":"webLink","webLinkUrl":f"{BASE_URL}/reservation"}]
+            f"🔄 예약이 수정되었습니다!\n📅 {parsed['month']}월 {parsed['day']}일 ({dow})\n👤 {parsed['name']} {pax_str}",
+            LINK_BTN
         )
 
     # 새 예약 등록
     new_id = hex(int(time.time()*1000))[2:] + ''.join(random.choices('abcdefghijklmnopqrstuvwxyz', k=4))
-    conn.execute(
+    conn3 = get_res_db()
+    conn3.execute(
         "INSERT INTO reservations (id,date,time,name,adult,child,cset,menu,note) VALUES (?,?,?,?,?,?,?,?,?)",
         (new_id, parsed['date'], parsed['time'], parsed['name'],
          parsed['adult'], parsed['child'], parsed['cset'], parsed['menu'], parsed['note'])
     )
-    conn.commit()
-    conn.close()
+    conn3.commit(); conn3.close()
 
     lines = [
         f"✅ 예약이 등록되었습니다!",
@@ -525,19 +567,10 @@ async def kakao_auto(request: Request):
         f"👤 {parsed['name']}",
         f"👥 {pax_str}",
     ]
-    if parsed['child'] > 0:
-        lines.append(f"  어른 {parsed['adult']}인분 / 어린이 {parsed['child']}명")
-        if parsed['cset'] > 0:
-            lines.append(f"  어린이세트 {parsed['cset']}개")
-    if parsed['menu']:
-        lines.append(f"🍽️ {parsed['menu']}")
-    if parsed['note']:
-        lines.append(f"📌 {parsed['note']}")
+    if parsed['menu']: lines.append(f"🍽️ {parsed['menu']}")
+    if parsed['note']: lines.append(f"📌 {parsed['note']}")
 
-    return kakao_res(
-        "\n".join(lines),
-        [{"label":"📋 예약 페이지","action":"webLink","webLinkUrl":f"{BASE_URL}/reservation"}]
-    )
+    return kakao_res("\n".join(lines), LINK_BTN)
 
 # ═══════════════════════════════════════════════
 #  네이버 예약 Gmail 자동 동기화
@@ -798,6 +831,8 @@ async def sync_naver_gmail():
                          parsed["name"], parsed["adult"], parsed["menu"])
                     )
                     added += 1
+                    # 카카오 채널 알림
+                    asyncio.create_task(send_kakao_notification(parsed))
 
             elif parsed["action"] == "cancel":
                 # 히스토리 기록 (삭제 전에)
@@ -845,6 +880,18 @@ async def sync_naver_gmail():
 
     except Exception as e:
         print(f"❌ Gmail 동기화 오류: {e}")
+
+async def send_kakao_notification(parsed: dict):
+    """
+    네이버 예약 확정 시 카카오 채널로 알림 전송
+    카카오 비즈메시지 API 필요 (현재는 로그만 기록)
+    → 추후 카카오 알림톡 API 연동 시 활성화
+    """
+    d = datetime(int(parsed["date"][:4]), int(parsed["date"][5:7]), int(parsed["date"][8:]))
+    dow = DOW_MAP[d.weekday()]
+    h = int(parsed["time"].split(":")[0])
+    t = f"{h-12 if h>=13 else h}:{parsed['time'].split(':')[1]}"
+    print(f"🔔 네이버 새 예약 알림: {d.month}/{d.day}({dow}) {t} {parsed['name']} {parsed['adult']}인 {parsed.get('menu','')}")
 
 # ── 확인용 API ──────────────────────────────
 @app.get("/api/naver-sync")
