@@ -518,9 +518,16 @@ def parse_reservation_msg(text: str):
     note = ' '.join(all_notes)
 
     # ── 날짜/시간 ──────────────────────────────
-    year  = now_kst().year
+    now = now_kst()
+    year = now.year
     month = int(date_m.group(1))
     day   = int(date_m.group(2))
+
+    # 연도 넘김 처리
+    # 예) 12월에 2월 예약 입력 → 2027년 2월로 처리
+    if now.month >= 10 and month <= 3:
+        year += 1  # 연말에 내년 초 예약
+
     date_str = f"{year}-{month:02d}-{day:02d}"
 
     raw_h = int(time_m.group(1))
@@ -998,8 +1005,8 @@ async def manual_sync():
     return {"ok": True, "message": "동기화 완료"}
 
 @app.get("/api/naver-history")
-def get_naver_history(limit: int = 50):
-    """네이버 예약 히스토리 조회"""
+def get_naver_history(limit: int = 10):
+    """네이버 예약 히스토리 조회 (기본 10건)"""
     conn = get_res_db()
     rows = conn.execute(
         "SELECT * FROM naver_history ORDER BY created DESC LIMIT ?", (limit,)
