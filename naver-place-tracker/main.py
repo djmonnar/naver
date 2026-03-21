@@ -282,6 +282,12 @@ def bulk_add(items: list[Reservation]):
 DOW_MAP = {0:"월",1:"화",2:"수",3:"목",4:"금",5:"토",6:"일"}
 BASE_URL = "https://naver-0zwy.onrender.com"
 
+def now_kst():
+    """한국 시간 반환"""
+    from datetime import timezone, timedelta
+    KST = timezone(timedelta(hours=9))
+    return datetime.now(KST)
+
 def fmt_time(t):
     h, m = t.split(":")
     h = int(h)
@@ -333,7 +339,7 @@ LINK_BTN = [{"label":"📋 예약 페이지","action":"webLink","webLinkUrl":f"{
 
 @app.post("/api/kakao/today")
 async def kakao_today(request: Request):
-    d = datetime.now()
+    d = now_kst()
     today = d.strftime("%Y-%m-%d")
     dow = DOW_MAP[d.weekday()]
     conn = get_res_db()
@@ -352,7 +358,7 @@ async def kakao_today(request: Request):
 @app.post("/api/kakao/tomorrow")
 async def kakao_tomorrow(request: Request):
     from datetime import timedelta
-    d = datetime.now() + timedelta(days=1)
+    d = now_kst() + timedelta(days=1)
     tmr = d.strftime("%Y-%m-%d")
     dow = DOW_MAP[d.weekday()]
     conn = get_res_db()
@@ -369,7 +375,7 @@ async def kakao_tomorrow(request: Request):
 # ── 오늘 카톡 내보내기 ───────────────────────
 @app.post("/api/kakao/export")
 async def kakao_export(request: Request):
-    d = datetime.now()
+    d = now_kst()
     today = d.strftime("%Y-%m-%d")
     dow = DOW_MAP[d.weekday()]
     conn = get_res_db()
@@ -468,7 +474,7 @@ def parse_reservation_msg(text: str):
         if set_m: after = after.replace(set_m.group(0), '').strip()
         note = re.sub(r'010[-\s]?\d{3,4}[-\s]?\d{4}', '', after).strip()
 
-    year = datetime.now().year
+    year = now_kst().year
     month, day = int(date_m.group(1)), int(date_m.group(2))
     date_str = f"{year}-{month:02d}-{day:02d}"
 
@@ -503,6 +509,24 @@ async def kakao_auto(request: Request):
         return kakao_res("메시지를 읽을 수 없어요.")
 
     parsed = parse_reservation_msg(utterance)
+
+    # 날짜만 있는 경우 → 날짜 예약 조회
+    import re as _re
+    date_only = _re.search(r'(\d{1,2})[/월](\d{1,2})', utterance)
+    is_date_query = date_only and ('예약' in utterance or '확인' in utterance) and not parsed
+
+    if is_date_query:
+        year = now_kst().year
+        month, day = int(date_only.group(1)), int(date_only.group(2))
+        date_str = f"{year}-{month:02d}-{day:02d}"
+        dow = DOW_MAP[datetime(year, month, day).weekday()]
+        conn = get_res_db()
+        rsvs = [dict(r) for r in conn.execute(
+            "SELECT * FROM reservations WHERE date=? ORDER BY time", (date_str,)
+        ).fetchall()]
+        conn.close()
+        text = build_rsv_text(rsvs, month, day, dow)
+        return kakao_res(text, LINK_BTN)
 
     # 예약 형식이 아니면 즉시 안내 반환
     if not parsed:
