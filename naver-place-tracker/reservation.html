@@ -195,23 +195,25 @@
         </div>
         <div>
           <label class="text-xs font-semibold text-stone-400 mb-1 block">메뉴</label>
-          <select id="fMenu" class="w-full border border-stone-200 rounded-xl px-3 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 bg-stone-50">
+          <select id="fMenu" onchange="toggleCustomMenu(this,'fMenuCustom')" class="w-full border border-stone-200 rounded-xl px-3 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 bg-stone-50">
             <option value="">-- 선택 --</option>
             <option value="시그">🎎 시그니처</option>
             <option value="스시">🍣 스시</option>
             <option value="스페셜">⭐ 스페셜</option>
-            <option value="의자시그">🪑 의자시그</option>
-            <option value="기타">📝 기타</option>
+            <option value="민물장어">🐟 민물장어</option>
+            <option value="미정">❓ 미정</option>
+            <option value="기타">📝 기타 (직접입력)</option>
           </select>
+          <input type="text" id="fMenuCustom" placeholder="예) 시그2 스시3" class="hidden w-full border border-amber-300 rounded-xl px-3 py-3 text-sm mt-2 focus:outline-none focus:ring-2 focus:ring-amber-400 bg-amber-50">
         </div>
         <div>
           <label class="text-xs font-semibold text-stone-400 mb-1 block">비고</label>
           <input type="text" id="fNote" placeholder="돌상탁자만 준비 / 환갑연 등" class="w-full border border-stone-200 rounded-xl px-3 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 bg-stone-50">
         </div>
       </div>
-      <div class="flex gap-2 mt-5 pb-2">
-        <button onclick="closeAdd()" class="flex-1 py-3 rounded-xl text-sm text-stone-500 border border-stone-200 font-medium">취소</button>
-        <button onclick="saveRes()" class="flex-1 py-3 rounded-xl text-sm bg-amber-500 text-white font-bold active:bg-amber-600">저장</button>
+      <div class="flex gap-3 mt-5 pb-6">
+        <button onclick="closeAdd()" class="flex-1 py-3.5 rounded-xl text-sm text-stone-500 border-2 border-stone-200 font-semibold bg-white">취소</button>
+        <button onclick="saveRes()" class="flex-1 py-3.5 rounded-xl text-sm bg-amber-500 text-white font-bold active:bg-amber-600 shadow-md">✅ 저장</button>
       </div>
     </div>
   </div>
@@ -351,7 +353,19 @@
 const API='';
 let rsvs=[],curY,curM,selD,sortMode='time',editId=null,pending=null,confId=null,exportSession='all',bulkParsed=[];
 const DOW=['일','월','화','수','목','금','토'];
-const MICONS={시그:'🎎',스시:'🍣',스페셜:'⭐',의자시그:'🪑',기타:'📝'};
+const MICONS={시그:'🎎',스시:'🍣',스페셜:'⭐',민물장어:'🐟',미정:'❓',기타:'📝'};
+
+function toggleCustomMenu(sel, customId){
+  const c=document.getElementById(customId);
+  if(sel.value==='기타'){c.classList.remove('hidden');c.focus();}
+  else{c.classList.add('hidden');c.value='';}
+}
+
+function getMenuValue(selectId, customId){
+  const sel=document.getElementById(selectId).value;
+  if(sel==='기타'){const c=document.getElementById(customId).value.trim();return c||'기타';}
+  return sel;
+}
 const EVENTS=['돌','환갑','칠순','팔순','회갑','기념일','생일','파티','회식','상견례'];
 const MENU_KEYS=['의자시그','시그니처','시그','스시','스페셜','스페샬','스패셜','수패셜','사페셜','민물','미정','세그'];
 const MENU_MAP={스페샬:'스페셜',스패셜:'스페셜',수패셜:'스페셜',사페셜:'스페셜',시그니처:'시그',세그:'시그'};
@@ -434,7 +448,36 @@ function renderList(ds){
   if(list.length>0){
     const tA=list.reduce((a,r)=>a+(r.adult||0),0),tC=list.reduce((a,r)=>a+(r.child||0),0);
     const mg=list.filter(r=>r.time<'15:00'),ev=list.filter(r=>r.time>='15:00');
-    si.textContent=`총 ${tA+tC}석 · 음식 ${tA}인분`+(tC>0?` · 어린이 ${tC}명`:'')+(mg.length?` · 점심 ${mg.length}건`:'')+(ev.length?` · 저녁 ${ev.length}건`:'');
+
+    // 메뉴별 집계 함수
+    function menuCount(arr){
+      const mc={};
+      arr.forEach(r=>{
+        const m=r.menu||'미정';
+        mc[m]=(mc[m]||0)+(r.adult||0);
+      });
+      return Object.entries(mc).filter(([,v])=>v>0).map(([k,v])=>`${k} ${v}`).join(' · ');
+    }
+
+    let summary = `총 ${tA+tC}석 · 음식 ${tA}인분`;
+    if(tC>0) summary += ` · 어린이 ${tC}명`;
+
+    // 전체 메뉴 집계
+    const totalMC = menuCount(list);
+    if(totalMC) summary += `\n${totalMC}`;
+
+    // 점심/저녁 메뉴 집계
+    if(mg.length && ev.length){
+      const mgMC=menuCount(mg), evMC=menuCount(ev);
+      if(mgMC) summary += `\n🌅 점심 ${mg.length}건: ${mgMC}`;
+      if(evMC) summary += `\n🌆 저녁 ${ev.length}건: ${evMC}`;
+    } else if(mg.length){
+      summary += ` · 점심 ${mg.length}건`;
+    } else if(ev.length){
+      summary += ` · 저녁 ${ev.length}건`;
+    }
+
+    si.textContent=summary;
   } else {si.textContent='';}
 
   const container=document.getElementById('resList');container.innerHTML='';
@@ -444,16 +487,25 @@ function renderList(ds){
   }
   if(sortMode==='time'){
     const mg=list.filter(r=>r.time<'15:00'),ev=list.filter(r=>r.time>='15:00');
-    if(mg.length){container.appendChild(mkSecHdr('🌅 점심',mg.length));const w=mkWrap();mg.forEach(r=>w.appendChild(mkCard(r)));container.appendChild(w);}
-    if(ev.length){container.appendChild(mkSecHdr('🌆 저녁',ev.length));const w=mkWrap();ev.forEach(r=>w.appendChild(mkCard(r)));container.appendChild(w);}
+    if(mg.length){
+      const mgMC=Object.entries(mg.reduce((a,r)=>{const m=r.menu||'미정';a[m]=(a[m]||0)+(r.adult||0);return a;},{})).filter(([,v])=>v>0).map(([k,v])=>`${k}${v}`).join(' ');
+      container.appendChild(mkSecHdr('🌅 점심',mg.length,mgMC));
+      const w=mkWrap();mg.forEach(r=>w.appendChild(mkCard(r)));container.appendChild(w);
+    }
+    if(ev.length){
+      const evMC=Object.entries(ev.reduce((a,r)=>{const m=r.menu||'미정';a[m]=(a[m]||0)+(r.adult||0);return a;},{})).filter(([,v])=>v>0).map(([k,v])=>`${k}${v}`).join(' ');
+      container.appendChild(mkSecHdr('🌆 저녁',ev.length,evMC));
+      const w=mkWrap();ev.forEach(r=>w.appendChild(mkCard(r)));container.appendChild(w);
+    }
   } else {
     const w=mkWrap();list.forEach(r=>w.appendChild(mkCard(r)));container.appendChild(w);
   }
 }
 function mkWrap(){const w=document.createElement('div');w.className='space-y-2 mb-4';return w;}
-function mkSecHdr(label,cnt){
+function mkSecHdr(label,cnt,menuSummary){
   const el=document.createElement('div');el.className='flex items-center gap-2 mb-2 mt-1';
-  el.innerHTML=`<div class="h-px flex-1 bg-stone-200"></div><span class="text-xs font-bold text-stone-400">${label}</span><span class="text-xs text-stone-300 bg-stone-100 px-2 py-0.5 rounded-full">${cnt}건</span><div class="h-px flex-1 bg-stone-200"></div>`;
+  const ms=menuSummary?`<span class="text-xs text-stone-400 ml-1">${menuSummary}</span>`:'';
+  el.innerHTML=`<div class="h-px flex-1 bg-stone-200"></div><span class="text-xs font-bold text-stone-400">${label}</span><span class="text-xs text-stone-300 bg-stone-100 px-2 py-0.5 rounded-full">${cnt}건</span>${ms}<div class="h-px flex-1 bg-stone-200"></div>`;
   return el;
 }
 function mkCard(r){
@@ -503,6 +555,11 @@ function openAdd(pre){
   document.getElementById('fChild').value=(pre&&pre.child)||'';
   document.getElementById('fCSet').value=(pre&&pre.cset)||'';
   document.getElementById('fMenu').value=(pre&&pre.menu)||'';
+  document.getElementById('fMenu').value=(pre&&pre.menu&&!['시그','스시','스페셜','민물장어','미정',''].includes(pre.menu))?'기타':(pre&&pre.menu)||'';
+  if(pre&&pre.menu&&!['시그','스시','스페셜','민물장어','미정',''].includes(pre.menu)){
+    document.getElementById('fMenuCustom').value=pre.menu;
+    document.getElementById('fMenuCustom').classList.remove('hidden');
+  }
   document.getElementById('fNote').value=(pre&&pre.note)||'';
   document.getElementById('addOvl').classList.add('open');
 }
@@ -513,7 +570,17 @@ function editRes(id,e){
   document.getElementById('fDate').value=r.date;document.getElementById('fTime').value=r.time;
   document.getElementById('fName').value=r.name;document.getElementById('fAdult').value=r.adult||'';
   document.getElementById('fChild').value=r.child||'';document.getElementById('fCSet').value=r.cset||'';
-  document.getElementById('fMenu').value=r.menu||'';document.getElementById('fNote').value=r.note||'';
+  const stdMenus=['시그','스시','스페셜','민물장어','미정',''];
+  if(stdMenus.includes(r.menu||'')){
+    document.getElementById('fMenu').value=r.menu||'';
+    document.getElementById('fMenuCustom').classList.add('hidden');
+    document.getElementById('fMenuCustom').value='';
+  } else {
+    document.getElementById('fMenu').value='기타';
+    document.getElementById('fMenuCustom').value=r.menu||'';
+    document.getElementById('fMenuCustom').classList.remove('hidden');
+  }
+  document.getElementById('fNote').value=r.note||'';
   document.getElementById('addOvl').classList.add('open');
 }
 async function saveRes(){
@@ -522,7 +589,7 @@ async function saveRes(){
   const adult=parseInt(document.getElementById('fAdult').value)||0;
   const child=parseInt(document.getElementById('fChild').value)||0;
   const cset=parseInt(document.getElementById('fCSet').value)||0;
-  const menu=document.getElementById('fMenu').value,note=document.getElementById('fNote').value.trim();
+  const menu=getMenuValue('fMenu','fMenuCustom'),note=document.getElementById('fNote').value.trim();
   if(!date||!time||!name){showToast('날짜·시간·고객명은 필수');return;}
   const nr={id:editId||uid(),date,time,name,adult,child,cset,menu,note};
   if(!editId){
