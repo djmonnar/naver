@@ -461,22 +461,9 @@ function renderList(ds){
 
     let summary = `총 ${tA+tC}석 · 음식 ${tA}인분`;
     if(tC>0) summary += ` · 어린이 ${tC}명`;
-
-    // 전체 메뉴 집계
-    const totalMC = menuCount(list);
-    if(totalMC) summary += `\n${totalMC}`;
-
-    // 점심/저녁 메뉴 집계
-    if(mg.length && ev.length){
-      const mgMC=menuCount(mg), evMC=menuCount(ev);
-      if(mgMC) summary += `\n🌅 점심 ${mg.length}건: ${mgMC}`;
-      if(evMC) summary += `\n🌆 저녁 ${ev.length}건: ${evMC}`;
-    } else if(mg.length){
-      summary += ` · 점심 ${mg.length}건`;
-    } else if(ev.length){
-      summary += ` · 저녁 ${ev.length}건`;
-    }
-
+    if(mg.length && ev.length) summary += ` · 점심 ${mg.length}건 · 저녁 ${ev.length}건`;
+    else if(mg.length) summary += ` · 점심 ${mg.length}건`;
+    else if(ev.length) summary += ` · 저녁 ${ev.length}건`;
     si.textContent=summary;
   } else {si.textContent='';}
 
@@ -498,7 +485,18 @@ function renderList(ds){
       const w=mkWrap();ev.forEach(r=>w.appendChild(mkCard(r)));container.appendChild(w);
     }
   } else {
-    const w=mkWrap();list.forEach(r=>w.appendChild(mkCard(r)));container.appendChild(w);
+    const mg=list.filter(r=>r.time<'15:00').sort((a,b)=>total(b)-total(a));
+    const ev=list.filter(r=>r.time>='15:00').sort((a,b)=>total(b)-total(a));
+    if(mg.length){
+      const mgMC=Object.entries(mg.reduce((a,r)=>{const m=r.menu||'미정';a[m]=(a[m]||0)+(r.adult||0);return a;},{})).filter(([,v])=>v>0).map(([k,v])=>`${k}${v}`).join(' ');
+      container.appendChild(mkSecHdr('🌅 점심',mg.length,mgMC));
+      const w=mkWrap();mg.forEach(r=>w.appendChild(mkCard(r)));container.appendChild(w);
+    }
+    if(ev.length){
+      const evMC=Object.entries(ev.reduce((a,r)=>{const m=r.menu||'미정';a[m]=(a[m]||0)+(r.adult||0);return a;},{})).filter(([,v])=>v>0).map(([k,v])=>`${k}${v}`).join(' ');
+      container.appendChild(mkSecHdr('🌆 저녁',ev.length,evMC));
+      const w=mkWrap();ev.forEach(r=>w.appendChild(mkCard(r)));container.appendChild(w);
+    }
   }
 }
 function mkWrap(){const w=document.createElement('div');w.className='space-y-2 mb-4';return w;}
