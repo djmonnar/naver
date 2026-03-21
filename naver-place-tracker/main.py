@@ -579,22 +579,31 @@ def parse_naver_email(subject: str, body: str):
     """
     import re
 
-    # 확정/취소 구분
+    # 확정/취소/변경 구분
     if "확정" in subject:
         action = "confirm"
     elif "취소" in subject:
         action = "cancel"
+    elif "변경" in subject:
+        action = "change"  # 변경: 취소내역 삭제 + 새 예약은 확정 이메일에서 처리
     else:
-        # 제목에 없으면 본문에서도 확인
         if "확정" in body:
             action = "confirm"
         elif "취소" in body:
             action = "cancel"
+        elif "변경" in body:
+            action = "change"
         else:
-            return None  # 접수/변경은 무시
+            return None  # 접수는 무시
 
-    # 예약번호
-    rsv_num_m = re.search(r'예약번호\s+(\d+)', body)
+    # 예약번호 — 확정/취소는 첫번째, 변경은 신규예약내역의 번호
+    if action == "change":
+        # 신규예약내역 섹션의 첫 번째 예약번호
+        new_section = body[body.find("신규예약내역"):] if "신규예약내역" in body else body
+        rsv_num_m = re.search(r'예약번호\s+(\d+)', new_section)
+    else:
+        rsv_num_m = re.search(r'예약번호\s+(\d+)', body)
+
     if not rsv_num_m:
         return None
     rsv_num = rsv_num_m.group(1)
@@ -771,6 +780,18 @@ async def sync_naver_gmail():
             elif parsed["action"] == "cancel":
                 conn.execute("DELETE FROM reservations WHERE id=?", (rsv_id,))
                 deleted += 1
+
+            elif parsed["action"] == "change":
+                # 변경: 본문에서 취소내역 예약번호 찾아서 삭제
+                import re as _re
+                # 취소내역 섹션의 예약번호 추출
+                cancel_section = body[body.find("취소내역"):] if "취소내역" in body else ""
+                cancel_nums = _re.findall(r'예약번호\s+(\d+)', cancel_section)
+                for cnum in cancel_nums:
+                    old_id = f"naver_{cnum}"
+                    conn.execute("DELETE FROM reservations WHERE id=?", (old_id,))
+                    deleted += 1
+                    print(f"🔄 변경으로 인한 취소 처리: {old_id}")
 
             # 처리 완료 로그
             conn.execute(
