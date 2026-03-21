@@ -38,8 +38,8 @@
     .modal-sheet { border-radius:20px !important; max-width:480px; }
     .modal-wide { border-radius:20px !important; max-width:600px; }
   }
-  .modal-sheet { width:100%; border-radius:20px 20px 0 0; background:#fff; max-height:92vh; overflow-y:auto; }
-  .modal-wide { width:100%; border-radius:20px 20px 0 0; background:#fff; max-height:92vh; overflow-y:auto; }
+  .modal-sheet { width:100%; border-radius:20px 20px 0 0; background:#fff; max-height:92vh; overflow-y:auto; padding-bottom:env(safe-area-inset-bottom, 16px); }
+  .modal-wide { width:100%; border-radius:20px 20px 0 0; background:#fff; max-height:92vh; overflow-y:auto; padding-bottom:env(safe-area-inset-bottom, 16px); }
 
   /* 바텀시트 핸들 */
   .sheet-handle { width:36px; height:4px; background:#e5e7eb; border-radius:2px; margin:10px auto 0; }
@@ -149,7 +149,7 @@
 </div>
 
 <!-- ── FAB: 직접 추가 ── -->
-<button onclick="openAdd()" class="fab fixed bottom-5 right-4 w-14 h-14 bg-amber-500 text-white rounded-full text-2xl flex items-center justify-center z-30 active:bg-amber-600">＋</button>
+<button onclick="openAdd()" class="fab fixed bottom-5 right-4 w-14 h-14 bg-amber-500 text-white rounded-full text-2xl flex items-center justify-center z-30 active:bg-amber-600" style="bottom:calc(1.25rem + env(safe-area-inset-bottom, 0px))">＋</button>
 
 <!-- ══════════════════════════════
      모달 / 바텀시트들
@@ -159,7 +159,7 @@
 <div class="overlay" id="addOvl" onclick="if(event.target===this)closeAdd()">
   <div class="modal-sheet">
     <div class="sheet-handle"></div>
-    <div class="p-5">
+    <div class="p-5 pb-8">
       <h3 class="serif text-lg font-bold text-stone-800 mb-4" id="addTitle">예약 추가</h3>
       <div class="space-y-3">
         <div>
@@ -221,7 +221,7 @@
 <div class="overlay" id="kakaoOvl" onclick="if(event.target===this)closeKakao()">
   <div class="modal-sheet">
     <div class="sheet-handle"></div>
-    <div class="p-5">
+    <div class="p-5 pb-8">
       <h3 class="serif text-lg font-bold text-stone-800 mb-3">📋 카톡 메시지 입력</h3>
       <textarea id="pasteMsg" rows="3" oninput="parseMsg()"
         placeholder="예) 4/4 토 12:30 박성은님 10.4인 시그 세트2 돌상탁자만 준비"
@@ -251,7 +251,7 @@
 <div class="overlay" id="bulkOvl" onclick="if(event.target===this)closeBulk()">
   <div class="modal-wide">
     <div class="sheet-handle"></div>
-    <div class="p-5">
+    <div class="p-5 pb-8">
       <h3 class="serif text-lg font-bold text-stone-800 mb-2">📥 카톡 대화 일괄 가져오기</h3>
       <div id="bulkStep1">
         <div class="bg-emerald-50 border border-emerald-200 rounded-xl p-3 mb-3 text-xs text-emerald-700 leading-relaxed">
@@ -299,7 +299,7 @@
 <div class="overlay" id="exportOvl" onclick="if(event.target===this)closeExport()">
   <div class="modal-sheet">
     <div class="sheet-handle"></div>
-    <div class="p-5">
+    <div class="p-5 pb-8">
       <h3 class="serif text-lg font-bold text-stone-800 mb-0.5">💬 카톡 내보내기</h3>
       <p class="text-xs text-stone-400 mb-3" id="exportSubtitle"></p>
       <div class="flex bg-stone-100 rounded-xl p-1 gap-1 mb-3">
@@ -321,7 +321,7 @@
 <div class="overlay" id="confOvl">
   <div class="modal-sheet">
     <div class="sheet-handle"></div>
-    <div class="p-5">
+    <div class="p-5 pb-8">
       <h3 class="serif text-base font-bold text-amber-600 mb-1">⚠️ 유사한 예약이 있습니다</h3>
       <p class="text-xs text-stone-500 mb-3">같은 날짜에 <strong class="text-stone-800" id="confName"></strong>의 기존 예약과 항목이 다릅니다.</p>
       <div class="border border-stone-200 rounded-xl overflow-hidden mb-4">
