@@ -27,7 +27,7 @@ app.add_middleware(
 # ═══════════════════════════════════════════════
 #  연해주 예약 DB  (Render Disk 마운트 경로)
 # ═══════════════════════════════════════════════
-RES_DB = "/var/data/reservations.db"
+RES_DB = "/app/data/reservations.db"
 
 def get_res_db():
     conn = sqlite3.connect(RES_DB)
