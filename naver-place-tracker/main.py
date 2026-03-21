@@ -403,7 +403,7 @@ async def kakao_by_date(request: Request):
     m = re.search(r"(\d{1,2})[/월](\d{1,2})", utterance)
     if not m:
         return kakao_res("날짜 형식이 맞지 않아요.\n예) '3/28 예약'으로 입력해주세요.")
-    year = datetime.now().year
+    year = now_kst().year
     month, day = int(m.group(1)), int(m.group(2))
     date_str = f"{year}-{month:02d}-{day:02d}"
     dow = DOW_MAP[datetime(year,month,day).weekday()]
@@ -447,35 +447,80 @@ def parse_reservation_msg(text: str):
     date_m = re.search(r'(\d{1,2})[/월](\d{1,2})', t)
     time_m = re.search(r'(\d{1,2}):(\d{2})', t)
     pax_m  = re.search(r'(\d+(?:\.\d+)?)인', t)
-    name_m = re.search(r'([가-힣A-Za-z0-9()（）]{2,6}님)', t)
+    name_m = re.search(r'([가-힣A-Za-z0-9()（）]{2,10}님)', t)
 
     if not (date_m and time_m and pax_m and name_m):
         return None
 
-    MENU_KEYS = ['의자시그','시그니처','시그','스시','스페셜','스페샬','스패셜','수패셜','사페셜','미정','기타']
-    MENU_MAP  = {'스페샬':'스페셜','스패셜':'스페셜','수패셜':'스페셜','사페셜':'스페셜','시그니처':'시그'}
+    # 취소 여부
+    is_cancel = t.endswith('취소') or '취소' in t.split()[-1:]
+
+    # ── 메뉴 파싱 ──────────────────────────────
+    MENU_MAP = {
+        '시그니처': '시그', '시그': '시그',
+        '스페셜': '스페셜', '스페샬': '스페셜', '스패셜': '스페셜',
+        '수패셜': '스페셜', '사페셜': '스페셜',
+        '스시': '스시', '수시': '스시',
+        '민물': '민물장어', '장어': '민물장어',
+        '미정': '미정',
+        '의자시그': '시그',  # 의자시그 → 시그 (아기의자는 note로)
+    }
 
     menu = ''
-    for mk in MENU_KEYS:
-        if mk in t:
-            menu = MENU_MAP.get(mk, mk)
-            break
-    if not menu:
-        menu = '시그'  # 메뉴 없으면 시그니처 기본값
+    menu_note = []
 
+    # 혼합 메뉴 감지 (예: 스시2 민물2)
+    mixed = re.findall(r'(시그니처|시그|스페셜|스페샬|스시|민물|장어|미정)(\d+)', t)
+    if len(mixed) >= 2:
+        menu = '+'.join([f"{MENU_MAP.get(m,m)}{n}" for m,n in mixed])
+    else:
+        for key, val in MENU_MAP.items():
+            if key in t:
+                menu = val
+                if key == '의자시그':
+                    menu_note.append('아기의자')
+                break
+        if not menu:
+            menu = '시그'  # 기본값
+
+    # ── 사이드 메뉴 파싱 ──────────────────────
+    # 사추 (사시미추가) - 숫자 있으면 그 수, 없으면 인원수
+    sa_m = re.search(r'사추(\d+)?', t)
+    if sa_m:
+        sa_n = sa_m.group(1) if sa_m.group(1) else ''
+        menu_note.append(f"사시미추가{sa_n}" if sa_n else "사시미추가")
+
+    # 우추 (우니추가)
+    if '우추' in t:
+        u_m = re.search(r'우추(\d+)?', t)
+        u_n = u_m.group(1) if u_m and u_m.group(1) else ''
+        menu_note.append(f"우니추가{u_n}" if u_n else "우니추가")
+
+    # ── 세트 ────────────────────────────────────
     set_m = re.search(r'세트(\d+)', t)
     cset = int(set_m.group(1)) if set_m else 0
 
-    # 비고: 메뉴 이후 내용
-    note = ''
-    mpos = t.find(menu) if menu else -1
-    if mpos != -1:
-        after = t[mpos + len(menu):].strip()
-        if set_m: after = after.replace(set_m.group(0), '').strip()
-        note = re.sub(r'010[-\s]?\d{3,4}[-\s]?\d{4}', '', after).strip()
+    # ── 비고 ────────────────────────────────────
+    # 메뉴/사이드/세트/예약정보 이후 남은 텍스트
+    note_text = t
+    for strip_pat in [
+        date_m.group(0), time_m.group(0), pax_m.group(0), name_m.group(0),
+        r'[월화수목금토일]', r'시그니처|의자시그|시그|스페셜|스페샬|스시|민물|장어|미정',
+        r'사추\d*', r'우추\d*', r'세트\d+', r'취소$'
+    ]:
+        note_text = re.sub(strip_pat, '', note_text).strip()
+    note_text = re.sub(r'\s+', ' ', note_text).strip()
 
-    year = now_kst().year
-    month, day = int(date_m.group(1)), int(date_m.group(2))
+    # 모든 비고 합치기
+    all_notes = menu_note[:]
+    if note_text:
+        all_notes.append(note_text)
+    note = ' '.join(all_notes)
+
+    # ── 날짜/시간 ──────────────────────────────
+    year  = now_kst().year
+    month = int(date_m.group(1))
+    day   = int(date_m.group(2))
     date_str = f"{year}-{month:02d}-{day:02d}"
 
     raw_h = int(time_m.group(1))
@@ -491,7 +536,8 @@ def parse_reservation_msg(text: str):
         'name': name_m.group(1),
         'adult': adult, 'child': child, 'cset': cset,
         'menu': menu, 'note': note,
-        'month': month, 'day': day
+        'month': month, 'day': day,
+        'is_cancel': is_cancel,
     }
 
 @app.post("/api/kakao/auto")
@@ -538,8 +584,35 @@ async def kakao_auto(request: Request):
             ]
         )
 
-    # 파싱 성공 → 즉시 응답 생성
-    year = datetime.now().year
+    # 파싱 성공 → 취소 처리
+    if parsed.get('is_cancel'):
+        conn = get_res_db()
+        existing = conn.execute(
+            "SELECT * FROM reservations WHERE date=? AND name=? ORDER BY created DESC",
+            (parsed['date'], parsed['name'])
+        ).fetchone()
+        if existing:
+            old = dict(existing)
+            conn.execute("DELETE FROM reservations WHERE id=?", (old['id'],))
+            conn.commit()
+            conn.close()
+            year = now_kst().year
+            d = datetime(year, parsed['month'], parsed['day'])
+            dow = DOW_MAP[d.weekday()]
+            return kakao_res(
+                f"🗑️ 예약이 취소되었습니다.\n\n"
+                f"📅 {parsed['month']}월 {parsed['day']}일 ({dow}) {fmt_time(old['time'])}\n"
+                f"👤 {old['name']} {old['adult']}인",
+                LINK_BTN
+            )
+        else:
+            conn.close()
+            return kakao_res(
+                f"⚠️ 취소할 예약을 찾지 못했어요.\n"
+                f"날짜와 이름을 확인해주세요.",
+                LINK_BTN
+            )
+    year = now_kst().year
     d = datetime(year, parsed['month'], parsed['day'])
     dow = DOW_MAP[d.weekday()]
     child_str = f".{parsed['child']}" if parsed['child'] > 0 else ""
