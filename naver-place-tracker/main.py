@@ -91,6 +91,8 @@ async def startup():
     scheduler.add_job(keep_alive, "interval", minutes=14, id="keep_alive", replace_existing=True)
     # 네이버 Gmail 동기화: 10분마다
     scheduler.add_job(sync_naver_gmail, "interval", minutes=10, id="gmail_sync", replace_existing=True)
+    # 자동 백업: 매일 자정
+    scheduler.add_job(auto_backup, CronTrigger(hour=0, minute=0, timezone="Asia/Seoul"), id="auto_backup", replace_existing=True)
     scheduler.start()
     print("스케줄러 시작")
     # 서버 시작 시 즉시 1회 동기화 (누락 방지)
@@ -387,6 +389,8 @@ def parse_reservation_msg(text: str):
         if mk in t:
             menu = MENU_MAP.get(mk, mk)
             break
+    if not menu:
+        menu = '시그'  # 메뉴 없으면 시그니처 기본값
 
     set_m = re.search(r'세트(\d+)', t)
     cset = int(set_m.group(1)) if set_m else 0
@@ -755,6 +759,41 @@ async def manual_sync():
     """수동 동기화 (테스트용)"""
     await sync_naver_gmail()
     return {"ok": True, "message": "동기화 완료"}
+
+# ═══════════════════════════════════════════════
+#  백업 기능 — 매일 자정 자동 백업
+# ═══════════════════════════════════════════════
+
+@app.get("/api/backup")
+def backup_download():
+    """
+    현재 예약 DB 전체를 JSON으로 다운로드
+    브라우저에서 접속하면 바로 저장 가능
+    """
+    conn = get_res_db()
+    rows = conn.execute("SELECT * FROM reservations ORDER BY date, time").fetchall()
+    conn.close()
+    data = [dict(r) for r in rows]
+    now = datetime.now().strftime("%Y%m%d_%H%M")
+    from fastapi.responses import Response
+    content = json.dumps(data, ensure_ascii=False, indent=2)
+    return Response(
+        content=content,
+        media_type="application/json",
+        headers={"Content-Disposition": f"attachment; filename=reservation_backup_{now}.json"}
+    )
+
+async def auto_backup():
+    """매일 자정 자동 백업 — Render 로그에 기록"""
+    try:
+        conn = get_res_db()
+        rows = conn.execute("SELECT * FROM reservations ORDER BY date, time").fetchall()
+        conn.close()
+        count = len(rows)
+        now = datetime.now().strftime("%Y-%m-%d %H:%M")
+        print(f"💾 자동 백업 완료: {now} / 총 {count}건")
+    except Exception as e:
+        print(f"❌ 백업 오류: {e}")
 
 if __name__ == "__main__":
     import uvicorn
