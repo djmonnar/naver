@@ -27,7 +27,7 @@ app.add_middleware(
 # ═══════════════════════════════════════════════
 #  연해주 예약 DB  (Render Disk 마운트 경로)
 # ═══════════════════════════════════════════════
-RES_DB = "/app/data/reservations.db"
+RES_DB = "/var/data/reservations.db"
 
 def get_res_db():
     conn = sqlite3.connect(RES_DB)
@@ -86,10 +86,15 @@ async def ping():
 async def startup():
     await database.init_db()
     init_res_db()
+    init_gmail_log_db()  # Gmail 로그 테이블 초기화
     scheduler.add_job(crawler.run_daily_check, CronTrigger(hour=9, minute=0, timezone="Asia/Seoul"), id="daily_check", replace_existing=True)
     scheduler.add_job(keep_alive, "interval", minutes=14, id="keep_alive", replace_existing=True)
+    # 네이버 Gmail 동기화: 10분마다
+    scheduler.add_job(sync_naver_gmail, "interval", minutes=10, id="gmail_sync", replace_existing=True)
     scheduler.start()
     print("스케줄러 시작")
+    # 서버 시작 시 즉시 1회 동기화 (누락 방지)
+    asyncio.create_task(sync_naver_gmail())
 
 @app.on_event("shutdown")
 async def shutdown():
@@ -529,6 +534,227 @@ async def kakao_auto(request: Request):
         "\n".join(lines),
         [{"label":"📋 예약 페이지","action":"webLink","webLinkUrl":f"{BASE_URL}/reservation"}]
     )
+
+# ═══════════════════════════════════════════════
+#  네이버 예약 Gmail 자동 동기화
+# ═══════════════════════════════════════════════
+
+def init_gmail_log_db():
+    """처리한 이메일 ID 저장 (중복 처리 방지)"""
+    conn = get_res_db()
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS gmail_log (
+            email_id TEXT PRIMARY KEY,
+            action   TEXT,
+            rsv_id   TEXT,
+            created  TEXT DEFAULT (datetime('now','localtime'))
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+def get_gmail_service():
+    """Gmail API 서비스 객체 생성"""
+    from google.oauth2.credentials import Credentials
+    from googleapiclient.discovery import build
+
+    creds = Credentials(
+        token=None,
+        refresh_token=os.environ.get("GMAIL_REFRESH_TOKEN"),
+        client_id=os.environ.get("GMAIL_CLIENT_ID"),
+        client_secret=os.environ.get("GMAIL_CLIENT_SECRET"),
+        token_uri="https://oauth2.googleapis.com/token",
+        scopes=["https://www.googleapis.com/auth/gmail.readonly"]
+    )
+    return build("gmail", "v1", credentials=creds)
+
+def parse_naver_email(subject: str, body: str):
+    """
+    네이버 예약 이메일 파싱
+    확정/취소 구분 후 예약 정보 추출
+    """
+    import re
+
+    # 확정/취소 구분
+    if "확정" in subject:
+        action = "confirm"
+    elif "취소" in subject:
+        action = "cancel"
+    else:
+        return None  # 접수/변경은 무시
+
+    # 예약번호
+    rsv_num_m = re.search(r'예약번호\s+(\d+)', body)
+    if not rsv_num_m:
+        return None
+    rsv_num = rsv_num_m.group(1)
+
+    # 예약자명
+    name_m = re.search(r'예약자명\s+([^\s\n]+님)', body)
+    name = name_m.group(1) if name_m else "네이버예약"
+
+    # 이용일시: "2026.03.23.(월) 오후 7:00, 2명"
+    dt_m = re.search(
+        r'이용일시\s+(\d{4})\.(\d{2})\.(\d{2})\.\([가-힣]\)\s+(오전|오후)\s+(\d{1,2}):(\d{2}),\s*(\d+)명',
+        body
+    )
+    if not dt_m:
+        return None
+
+    year, month, day = dt_m.group(1), dt_m.group(2), dt_m.group(3)
+    ampm  = dt_m.group(4)
+    hour  = int(dt_m.group(5))
+    minute = dt_m.group(6)
+    pax   = int(dt_m.group(7))
+
+    if ampm == "오후" and hour != 12:
+        hour += 12
+    elif ampm == "오전" and hour == 12:
+        hour = 0
+
+    date_str = f"{year}-{month}-{day}"
+    time_str = f"{hour:02d}:{minute}"
+
+    # 예약상품 → 메뉴 매핑
+    menu = ""
+    prod_m = re.search(r'예약상품\s+(.+)', body)
+    if prod_m:
+        prod = prod_m.group(1)
+        if "시그니처" in prod or "시그" in prod:
+            menu = "시그"
+        elif "스시" in prod:
+            menu = "스시"
+        elif "스페셜" in prod:
+            menu = "스페셜"
+
+    return {
+        "action":   action,
+        "rsv_num":  rsv_num,   # 네이버 예약번호 → id로 사용
+        "date":     date_str,
+        "time":     time_str,
+        "name":     name,
+        "adult":    pax,
+        "child":    0,
+        "cset":     0,
+        "menu":     menu,
+        "note":     "네이버예약",
+    }
+
+async def sync_naver_gmail():
+    """
+    Gmail에서 네이버 예약 이메일 가져와서 DB 동기화
+    확정 → 추가, 취소 → 삭제
+    """
+    try:
+        from googleapiclient.discovery import build
+        import base64
+
+        service = get_gmail_service()
+        conn = get_res_db()
+
+        # 최근 24시간 이내 네이버 예약 이메일 검색
+        query = 'from:naver.com subject:"네이버 예약" newer_than:1d'
+        result = service.users().messages().list(
+            userId="me", q=query, maxResults=50
+        ).execute()
+
+        messages = result.get("messages", [])
+        if not messages:
+            print("📭 새 네이버 예약 이메일 없음")
+            conn.close()
+            return
+
+        added = updated = deleted = skipped = 0
+
+        for msg in messages:
+            email_id = msg["id"]
+
+            # 이미 처리한 이메일이면 건너뜀
+            already = conn.execute(
+                "SELECT email_id FROM gmail_log WHERE email_id=?", (email_id,)
+            ).fetchone()
+            if already:
+                skipped += 1
+                continue
+
+            # 이메일 상세 가져오기
+            detail = service.users().messages().get(
+                userId="me", id=email_id, format="full"
+            ).execute()
+
+            # 제목 추출
+            headers = detail["payload"].get("headers", [])
+            subject = next((h["value"] for h in headers if h["name"] == "Subject"), "")
+
+            # 본문 추출
+            body = ""
+            payload = detail["payload"]
+            if "parts" in payload:
+                for part in payload["parts"]:
+                    if part["mimeType"] == "text/plain":
+                        data = part["body"].get("data", "")
+                        body = base64.urlsafe_b64decode(data).decode("utf-8", errors="ignore")
+                        break
+            elif "body" in payload:
+                data = payload["body"].get("data", "")
+                body = base64.urlsafe_b64decode(data).decode("utf-8", errors="ignore")
+
+            # 파싱
+            parsed = parse_naver_email(subject, body)
+            if not parsed:
+                # 처리 불필요한 이메일도 로그에 기록 (재처리 방지)
+                conn.execute(
+                    "INSERT OR IGNORE INTO gmail_log (email_id, action) VALUES (?,?)",
+                    (email_id, "skip")
+                )
+                skipped += 1
+                continue
+
+            rsv_id = f"naver_{parsed['rsv_num']}"
+
+            if parsed["action"] == "confirm":
+                # 이미 있으면 업데이트, 없으면 추가
+                existing = conn.execute(
+                    "SELECT id FROM reservations WHERE id=?", (rsv_id,)
+                ).fetchone()
+                if existing:
+                    conn.execute(
+                        "UPDATE reservations SET date=?,time=?,name=?,adult=?,menu=?,note=? WHERE id=?",
+                        (parsed["date"], parsed["time"], parsed["name"],
+                         parsed["adult"], parsed["menu"], parsed["note"], rsv_id)
+                    )
+                    updated += 1
+                else:
+                    conn.execute(
+                        "INSERT INTO reservations (id,date,time,name,adult,child,cset,menu,note) VALUES (?,?,?,?,?,?,?,?,?)",
+                        (rsv_id, parsed["date"], parsed["time"], parsed["name"],
+                         parsed["adult"], 0, 0, parsed["menu"], parsed["note"])
+                    )
+                    added += 1
+
+            elif parsed["action"] == "cancel":
+                conn.execute("DELETE FROM reservations WHERE id=?", (rsv_id,))
+                deleted += 1
+
+            # 처리 완료 로그
+            conn.execute(
+                "INSERT OR IGNORE INTO gmail_log (email_id, action, rsv_id) VALUES (?,?,?)",
+                (email_id, parsed["action"], rsv_id)
+            )
+
+        conn.commit()
+        conn.close()
+        print(f"✅ 네이버 예약 동기화: 추가 {added} / 수정 {updated} / 삭제 {deleted} / 스킵 {skipped}")
+
+    except Exception as e:
+        print(f"❌ Gmail 동기화 오류: {e}")
+
+# ── 확인용 API ──────────────────────────────
+@app.get("/api/naver-sync")
+async def manual_sync():
+    """수동 동기화 (테스트용)"""
+    await sync_naver_gmail()
+    return {"ok": True, "message": "동기화 완료"}
 
 if __name__ == "__main__":
     import uvicorn
