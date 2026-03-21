@@ -585,7 +585,13 @@ def parse_naver_email(subject: str, body: str):
     elif "취소" in subject:
         action = "cancel"
     else:
-        return None  # 접수/변경은 무시
+        # 제목에 없으면 본문에서도 확인
+        if "확정" in body:
+            action = "confirm"
+        elif "취소" in body:
+            action = "cancel"
+        else:
+            return None  # 접수/변경은 무시
 
     # 예약번호
     rsv_num_m = re.search(r'예약번호\s+(\d+)', body)
@@ -656,8 +662,8 @@ async def sync_naver_gmail():
         service = get_gmail_service()
         conn = get_res_db()
 
-        # 최근 24시간 이내 네이버 예약 이메일 검색
-        query = 'from:naver.com subject:"네이버 예약" newer_than:1d'
+        # 검색 범위 넓힘 — 발신자 제한 없이 제목만으로 검색
+        query = '네이버 예약 newer_than:3d'
         result = service.users().messages().list(
             userId="me", q=query, maxResults=50
         ).execute()
@@ -690,18 +696,44 @@ async def sync_naver_gmail():
             headers = detail["payload"].get("headers", [])
             subject = next((h["value"] for h in headers if h["name"] == "Subject"), "")
 
-            # 본문 추출
+            # 본문 추출 (text/plain 우선, 없으면 HTML에서 태그 제거)
             body = ""
             payload = detail["payload"]
-            if "parts" in payload:
-                for part in payload["parts"]:
-                    if part["mimeType"] == "text/plain":
-                        data = part["body"].get("data", "")
-                        body = base64.urlsafe_b64decode(data).decode("utf-8", errors="ignore")
-                        break
-            elif "body" in payload:
-                data = payload["body"].get("data", "")
-                body = base64.urlsafe_b64decode(data).decode("utf-8", errors="ignore")
+
+            def extract_body(payload):
+                """재귀적으로 본문 추출"""
+                import base64, re
+                if "parts" in payload:
+                    # text/plain 먼저 시도
+                    for part in payload["parts"]:
+                        if part["mimeType"] == "text/plain":
+                            data = part["body"].get("data", "")
+                            if data:
+                                return base64.urlsafe_b64decode(data).decode("utf-8", errors="ignore")
+                    # text/plain 없으면 HTML
+                    for part in payload["parts"]:
+                        if part["mimeType"] == "text/html":
+                            data = part["body"].get("data", "")
+                            if data:
+                                html = base64.urlsafe_b64decode(data).decode("utf-8", errors="ignore")
+                                # HTML 태그 제거
+                                text = re.sub(r'<[^>]+>', ' ', html)
+                                text = re.sub(r'&nbsp;', ' ', text)
+                                text = re.sub(r'&gt;', '>', text)
+                                text = re.sub(r'\s+', ' ', text)
+                                return text
+                    # 멀티파트면 재귀
+                    for part in payload["parts"]:
+                        result = extract_body(part)
+                        if result:
+                            return result
+                elif "body" in payload:
+                    data = payload["body"].get("data", "")
+                    if data:
+                        return base64.urlsafe_b64decode(data).decode("utf-8", errors="ignore")
+                return ""
+
+            body = extract_body(payload)
 
             # 파싱
             parsed = parse_naver_email(subject, body)
