@@ -209,9 +209,9 @@
           <input type="text" id="fNote" placeholder="돌상탁자만 준비 / 환갑연 등" class="w-full border border-stone-200 rounded-xl px-3 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 bg-stone-50">
         </div>
       </div>
-      <div class="flex gap-2 mt-5">
+      <div class="flex gap-2 mt-5 pb-2">
         <button onclick="closeAdd()" class="flex-1 py-3 rounded-xl text-sm text-stone-500 border border-stone-200 font-medium">취소</button>
-        <button onclick="saveRes()" class="flex-2 px-6 py-3 rounded-xl text-sm bg-amber-500 text-white font-bold active:bg-amber-600">저장</button>
+        <button onclick="saveRes()" class="flex-1 py-3 rounded-xl text-sm bg-amber-500 text-white font-bold active:bg-amber-600">저장</button>
       </div>
     </div>
   </div>
@@ -557,6 +557,7 @@ function parseOneLine(t){
   const nM=t.match(/([가-힣A-Za-z0-9()（）]{2,6}님)/),pM=t.match(/(\d+(?:\.\d+)?)인/);
   if(!dM||!tM||!nM||!pM) return null;
   let menu='';for(const mk of MENU_KEYS){if(t.includes(mk)){menu=MENU_MAP[mk]||mk;break;}}
+  if(!menu) menu='시그';  // 메뉴 없으면 시그니처 기본값
   const setM=t.match(/세트(\d+)/);
   let note='';const mPos=menu?t.indexOf(menu):-1;
   if(mPos!==-1){let a=t.slice(mPos+menu.length).trim();if(setM)a=a.replace(setM[0],'').trim();note=a.trim();}
