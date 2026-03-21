@@ -544,7 +544,7 @@ async def kakao_auto(request: Request):
 # ═══════════════════════════════════════════════
 
 def init_gmail_log_db():
-    """처리한 이메일 ID 저장 (중복 처리 방지)"""
+    """처리한 이메일 ID 저장 (중복 처리 방지) + 네이버 예약 히스토리"""
     conn = get_res_db()
     conn.execute("""
         CREATE TABLE IF NOT EXISTS gmail_log (
@@ -552,6 +552,22 @@ def init_gmail_log_db():
             action   TEXT,
             rsv_id   TEXT,
             created  TEXT DEFAULT (datetime('now','localtime'))
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS naver_history (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            action     TEXT NOT NULL,
+            rsv_id     TEXT,
+            date       TEXT,
+            time       TEXT,
+            name       TEXT,
+            adult      INTEGER,
+            menu       TEXT,
+            old_date   TEXT,
+            old_time   TEXT,
+            old_adult  INTEGER,
+            created    TEXT DEFAULT (datetime('now','localtime'))
         )
     """)
     conn.commit()
@@ -775,23 +791,47 @@ async def sync_naver_gmail():
                         (rsv_id, parsed["date"], parsed["time"], parsed["name"],
                          parsed["adult"], 0, 0, parsed["menu"], parsed["note"])
                     )
+                    # 히스토리 기록
+                    conn.execute(
+                        "INSERT INTO naver_history (action,rsv_id,date,time,name,adult,menu) VALUES (?,?,?,?,?,?,?)",
+                        ("추가", rsv_id, parsed["date"], parsed["time"],
+                         parsed["name"], parsed["adult"], parsed["menu"])
+                    )
                     added += 1
 
             elif parsed["action"] == "cancel":
+                # 히스토리 기록 (삭제 전에)
+                old = conn.execute("SELECT * FROM reservations WHERE id=?", (rsv_id,)).fetchone()
+                if old:
+                    old = dict(old)
+                    conn.execute(
+                        "INSERT INTO naver_history (action,rsv_id,date,time,name,adult,menu) VALUES (?,?,?,?,?,?,?)",
+                        ("취소", rsv_id, old["date"], old["time"],
+                         old["name"], old["adult"], old.get("menu",""))
+                    )
                 conn.execute("DELETE FROM reservations WHERE id=?", (rsv_id,))
                 deleted += 1
 
             elif parsed["action"] == "change":
                 # 변경: 본문에서 취소내역 예약번호 찾아서 삭제
                 import re as _re
-                # 취소내역 섹션의 예약번호 추출
                 cancel_section = body[body.find("취소내역"):] if "취소내역" in body else ""
+                new_section    = body[body.find("신규예약내역"):body.find("취소내역")] if "신규예약내역" in body and "취소내역" in body else ""
                 cancel_nums = _re.findall(r'예약번호\s+(\d+)', cancel_section)
                 for cnum in cancel_nums:
                     old_id = f"naver_{cnum}"
-                    conn.execute("DELETE FROM reservations WHERE id=?", (old_id,))
-                    deleted += 1
-                    print(f"🔄 변경으로 인한 취소 처리: {old_id}")
+                    old = conn.execute("SELECT * FROM reservations WHERE id=?", (old_id,)).fetchone()
+                    if old:
+                        old = dict(old)
+                        conn.execute(
+                            "INSERT INTO naver_history (action,rsv_id,date,time,name,adult,menu,old_date,old_time,old_adult) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                            ("변경", rsv_id,
+                             parsed["date"], parsed["time"], parsed["name"], parsed["adult"], parsed["menu"],
+                             old["date"], old["time"], old["adult"])
+                        )
+                        conn.execute("DELETE FROM reservations WHERE id=?", (old_id,))
+                        deleted += 1
+                        print(f"🔄 변경으로 인한 취소 처리: {old_id}")
 
             # 처리 완료 로그
             conn.execute(
@@ -812,6 +852,16 @@ async def manual_sync():
     """수동 동기화 (테스트용)"""
     await sync_naver_gmail()
     return {"ok": True, "message": "동기화 완료"}
+
+@app.get("/api/naver-history")
+def get_naver_history(limit: int = 50):
+    """네이버 예약 히스토리 조회"""
+    conn = get_res_db()
+    rows = conn.execute(
+        "SELECT * FROM naver_history ORDER BY created DESC LIMIT ?", (limit,)
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
 
 # ═══════════════════════════════════════════════
 #  백업 기능 — 매일 자정 자동 백업
