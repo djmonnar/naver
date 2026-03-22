@@ -601,6 +601,11 @@ async def kakao_auto(request: Request):
         if existing:
             old = dict(existing)
             conn.execute("DELETE FROM reservations WHERE id=?", (old['id'],))
+            # 카카오 히스토리 기록
+            conn.execute(
+                "INSERT INTO kakao_history (action,date,time,name,adult,child,menu,note) VALUES (?,?,?,?,?,?,?,?)",
+                ("취소", old['date'], old['time'], old['name'], old['adult'], old.get('child',0), old.get('menu',''), old.get('note',''))
+            )
             conn.commit()
             conn.close()
             year = now_kst().year
@@ -648,6 +653,11 @@ async def kakao_auto(request: Request):
             "UPDATE reservations SET time=?,adult=?,child=?,cset=?,menu=?,note=? WHERE id=?",
             (parsed['time'], parsed['adult'], parsed['child'], parsed['cset'], parsed['menu'], parsed['note'], old['id'])
         )
+        # 카카오 히스토리 기록
+        conn2.execute(
+            "INSERT INTO kakao_history (action,date,time,name,adult,child,menu,note) VALUES (?,?,?,?,?,?,?,?)",
+            ("수정", parsed['date'], parsed['time'], parsed['name'], parsed['adult'], parsed['child'], parsed['menu'], parsed['note'])
+        )
         conn2.commit(); conn2.close()
         return kakao_res(
             f"🔄 예약이 수정되었습니다!\n📅 {parsed['month']}월 {parsed['day']}일 ({dow})\n👤 {parsed['name']} {pax_str}",
@@ -661,6 +671,11 @@ async def kakao_auto(request: Request):
         "INSERT INTO reservations (id,date,time,name,adult,child,cset,menu,note) VALUES (?,?,?,?,?,?,?,?,?)",
         (new_id, parsed['date'], parsed['time'], parsed['name'],
          parsed['adult'], parsed['child'], parsed['cset'], parsed['menu'], parsed['note'])
+    )
+    # 카카오 히스토리 기록
+    conn3.execute(
+        "INSERT INTO kakao_history (action,date,time,name,adult,child,menu,note) VALUES (?,?,?,?,?,?,?,?)",
+        ("추가", parsed['date'], parsed['time'], parsed['name'], parsed['adult'], parsed['child'], parsed['menu'], parsed['note'])
     )
     conn3.commit(); conn3.close()
 
@@ -707,10 +722,22 @@ def init_gmail_log_db():
             created    TEXT DEFAULT (datetime('now','localtime'))
         )
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS kakao_history (
+            id       INTEGER PRIMARY KEY AUTOINCREMENT,
+            action   TEXT NOT NULL,
+            date     TEXT,
+            time     TEXT,
+            name     TEXT,
+            adult    INTEGER,
+            child    INTEGER,
+            menu     TEXT,
+            note     TEXT,
+            created  TEXT DEFAULT (datetime('now','localtime'))
+        )
+    """)
     conn.commit()
     conn.close()
-
-def get_gmail_service():
     """Gmail API 서비스 객체 생성"""
     from google.oauth2.credentials import Credentials
     from googleapiclient.discovery import build
@@ -1014,6 +1041,16 @@ def get_naver_history(limit: int = 10):
     conn.close()
     return [dict(r) for r in rows]
 
+@app.get("/api/kakao-history")
+def get_kakao_history(limit: int = 10):
+    """카카오 챗봇 히스토리 조회 (기본 10건)"""
+    conn = get_res_db()
+    rows = conn.execute(
+        "SELECT * FROM kakao_history ORDER BY created DESC LIMIT ?", (limit,)
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
 # ═══════════════════════════════════════════════
 #  백업 기능 — 매일 자정 자동 백업
 # ═══════════════════════════════════════════════
@@ -1053,6 +1090,3 @@ if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run("main:app", host="0.0.0.0", port=port, reload=False)
-@app.get("/manual")
-async def manual_page():
-    return FileResponse("manual.html")
