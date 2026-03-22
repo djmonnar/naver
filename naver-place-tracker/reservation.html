@@ -776,8 +776,20 @@ function showToast(msg){
 init();
 </script>
 
-<!-- ── 네이버 예약 히스토리 ── -->
-<div class="px-4 pb-24 mt-4">
+<!-- ── 히스토리 섹션 ── -->
+<div class="px-4 pb-8 mt-6">
+
+  <!-- 카카오 챗봇 히스토리 -->
+  <div class="flex items-center gap-3 mb-3">
+    <div class="h-px flex-1 bg-stone-200"></div>
+    <span class="text-xs font-bold text-stone-400">💬 카카오 챗봇 히스토리</span>
+    <div class="h-px flex-1 bg-stone-200"></div>
+  </div>
+  <div id="kakaoHistoryList" class="space-y-2 mb-6">
+    <div class="text-center text-xs text-stone-300 py-4">로딩 중...</div>
+  </div>
+
+  <!-- 네이버 예약 히스토리 -->
   <div class="flex items-center gap-3 mb-3">
     <div class="h-px flex-1 bg-stone-200"></div>
     <span class="text-xs font-bold text-stone-400">📋 네이버 예약 히스토리</span>
@@ -789,6 +801,37 @@ init();
 </div>
 
 <script>
+async function loadKakaoHistory(){
+  try{
+    const res=await fetch(`${API}/api/kakao-history?limit=10`);
+    const data=await res.json();
+    const el=document.getElementById('kakaoHistoryList');
+    if(!data.length){
+      el.innerHTML='<div class="text-center text-xs text-stone-300 py-4">히스토리가 없습니다</div>';
+      return;
+    }
+    el.innerHTML=data.map(h=>{
+      const ac=h.action==='추가'?'bg-emerald-100 text-emerald-600':
+               h.action==='취소'?'bg-red-100 text-red-500':
+               'bg-orange-100 text-orange-500';
+      const d=h.date?new Date(h.date+'T00:00:00'):null;
+      const dateStr=d?`${d.getMonth()+1}/${d.getDate()}`:'-';
+      const fmtT=t=>{if(!t)return'';const h2=parseInt(t.split(':')[0]);return`${h2>=13?h2-12:h2}:${t.split(':')[1]}`;};
+      const at=h.created?h.created.slice(5,16):'';
+      const child=h.child>0?`.${h.child}`:'';
+      const detail=`${dateStr} ${fmtT(h.time)} ${h.name||''} ${h.adult||''}${child}인${h.menu?' '+h.menu:''}${h.note?' '+h.note:''}`;
+      return `<div class="flex items-center gap-2 bg-white rounded-xl px-3 py-2.5 border border-stone-100">
+        <span class="text-xs px-2 py-0.5 rounded-full font-semibold shrink-0 ${ac}">${h.action}</span>
+        <span class="text-xs text-stone-600 flex-1 min-w-0 truncate">${detail}</span>
+        <span class="text-xs text-stone-300 shrink-0 whitespace-nowrap">${at}</span>
+      </div>`;
+    }).join('');
+  }catch(e){
+    document.getElementById('kakaoHistoryList').innerHTML=
+      '<div class="text-center text-xs text-stone-300 py-4">히스토리 없음</div>';
+  }
+}
+
 async function loadHistory(){
   try{
     const res=await fetch(`${API}/api/naver-history?limit=30`);
@@ -825,6 +868,7 @@ async function loadHistory(){
   }
 }
 loadHistory();
+loadKakaoHistory();
 </script>
 </body>
 </html>
