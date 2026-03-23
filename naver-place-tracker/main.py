@@ -738,6 +738,8 @@ def init_gmail_log_db():
     """)
     conn.commit()
     conn.close()
+
+def get_gmail_service():
     """Gmail API 서비스 객체 생성"""
     from google.oauth2.credentials import Credentials
     from googleapiclient.discovery import build
@@ -1090,7 +1092,3 @@ if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run("main:app", host="0.0.0.0", port=port, reload=False)
-
-@app.get("/manual")
-async def manual_page():
-    return FileResponse("manual.html")
