@@ -17,7 +17,7 @@ from firebase_config import get_admin_app, get_data_backend, get_web_config, use
 app = FastAPI(title="네이버 플레이스 순위 트래커")
 templates = Jinja2Templates(directory="templates")
 scheduler = AsyncIOScheduler(timezone="Asia/Seoul")
-APP_VERSION = "split-reservation-20260708"
+APP_VERSION = "tracker-reliability-20260708"
 ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "djmonnar4@gmail.com").strip().lower()
 MANUAL_CHECK_LIMIT_PER_DAY = int(os.environ.get("MANUAL_CHECK_LIMIT_PER_DAY", "3"))
 RUNNING_RANK_CHECKS: set[str] = set()
@@ -299,6 +299,9 @@ async def _search_places_payload(q: str = "", limit: int = 5) -> dict:
 @app.on_event("startup")
 async def startup():
     await database.init_db()
+    stale = await database.reset_stale_check_statuses()
+    if stale:
+        print(f"재시작으로 중단된 체크 상태 {stale}건 리셋")
     _ensure_rank_check_worker()
     scheduler.add_job(_enqueue_daily_rank_checks, CronTrigger(hour=9, minute=0, timezone="Asia/Seoul"), id="daily_check", replace_existing=True)
     scheduler.add_job(keep_alive, "interval", minutes=14, id="keep_alive", replace_existing=True)
@@ -614,19 +617,33 @@ async def _run_rank_check_job(user_id: str, source: str = "manual") -> None:
     finally:
         RUNNING_RANK_CHECKS.discard(user_id)
 
-    rankings_saved = int((summary or {}).get("rankings_saved") or 0)
-    if rankings_saved > 0:
-        message = f"순위 체크 완료: {rankings_saved}건 저장"
+    summary = summary or {}
+    rankings_saved = int(summary.get("rankings_saved") or 0)
+    failed_keywords = list(summary.get("failed_keywords") or [])
+    if rankings_saved > 0 and not failed_keywords:
         state = "done"
+        message = f"순위 체크 완료: {rankings_saved}건 저장"
+    elif rankings_saved > 0:
+        state = "done"
+        message = (
+            f"순위 체크 완료: {rankings_saved}건 저장 "
+            f"(수집 실패: {', '.join(failed_keywords)})"
+        )
+    elif failed_keywords:
+        state = "error"
+        message = (
+            "네이버 검색 결과를 수집하지 못해 순위를 저장하지 않았습니다. "
+            "잠시 후 다시 시도해주세요."
+        )
     else:
-        message = "순위 체크 완료: 저장된 순위가 없습니다."
         state = "empty"
+        message = "순위 체크 완료: 저장된 순위가 없습니다."
 
     await database.set_check_status(
         user_id,
         state,
         message,
-        {"source": source, **(summary or {})},
+        {"source": source, **summary},
     )
 
 

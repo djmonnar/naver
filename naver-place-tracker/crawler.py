@@ -4,8 +4,15 @@ import urllib.parse
 import re
 import json
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from playwright.async_api import async_playwright
 import database
+
+KST = ZoneInfo("Asia/Seoul")
+
+
+def _now_kst() -> datetime:
+    return datetime.now(KST)
 
 MAX_RANK = 100
 TOP_LIST_LIMIT = 30
@@ -680,7 +687,8 @@ def _build_place_keyword_pairs(places: list[dict], keywords: list[dict]) -> list
 
 
 async def run_daily_check(user_id: str | None = None):
-    today = datetime.now().strftime("%Y-%m-%d")
+    # 날짜는 KST 기준으로 기록 (서버가 UTC여도 한국 날짜로 저장)
+    today = _now_kst().strftime("%Y-%m-%d")
     user_ids = [user_id] if user_id else await database.list_user_ids()
     summary = {
         "users": len(user_ids),
@@ -690,13 +698,14 @@ async def run_daily_check(user_id: str | None = None):
         "keywords": 0,
         "rankings_saved": 0,
         "keyword_results_saved": 0,
+        "failed_keywords": [],
     }
 
     if not user_ids:
         print("등록된 사용자 없음")
         return summary
 
-    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 순위 체크 시작")
+    print(f"[{_now_kst().strftime('%Y-%m-%d %H:%M:%S')}] 순위 체크 시작")
 
     for owner_uid in user_ids:
         places = await database.get_places(owner_uid)
@@ -727,14 +736,25 @@ async def run_daily_check(user_id: str | None = None):
             )
 
             keyword_results = await search_keyword_results(keyword, TOP_LIST_LIMIT)
-            if keyword_results:
-                await database.save_keyword_results(
-                    keyword,
-                    keyword_results,
-                    today,
+            if not keyword_results:
+                # 수집 0건 = 크롤링 실패로 간주 (네이버 구조 변경/차단 가능성).
+                # "순위 밖(-1)"으로 잘못 기록하지 않도록 이 키워드는 저장을 건너뜀.
+                summary["failed_keywords"].append(keyword)
+                print(f"  ⚠️ [{keyword}] 검색 결과 수집 실패 — 순위 저장 건너뜀")
+                await _set_check_progress(
                     owner_uid,
+                    f"{keyword} 수집 실패 — 저장 건너뜀 ({keyword_index}/{total_keywords})",
+                    {"current_keyword": keyword, "keyword_index": keyword_index, "keyword_total": total_keywords},
                 )
-                summary["keyword_results_saved"] += len(keyword_results)
+                continue
+
+            await database.save_keyword_results(
+                keyword,
+                keyword_results,
+                today,
+                owner_uid,
+            )
+            summary["keyword_results_saved"] += len(keyword_results)
             rank_by_place_id, rank_by_name = _build_rank_indexes(keyword_results)
 
             for pair in pairs_by_keyword[keyword]:
@@ -765,7 +785,7 @@ async def run_daily_check(user_id: str | None = None):
                 {"current_keyword": keyword, "keyword_index": keyword_index, "keyword_total": total_keywords},
             )
 
-    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 순위 체크 완료")
+    print(f"[{_now_kst().strftime('%Y-%m-%d %H:%M:%S')}] 순위 체크 완료")
     return summary
 
 if __name__ == "__main__":

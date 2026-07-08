@@ -2,10 +2,13 @@ import asyncio
 import base64
 import os
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import aiosqlite
 
 from firebase_config import get_admin_app, uses_firestore
+
+KST = ZoneInfo("Asia/Seoul")
 
 
 DB_PATH = os.environ.get("DB_PATH", "tracker.db")
@@ -19,7 +22,7 @@ def _user_id(user_id: str | None) -> str:
 
 
 def _now_text() -> str:
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    return datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _keyword_doc_id(keyword: str) -> str:
@@ -273,6 +276,34 @@ async def set_check_status(
 
         await asyncio.to_thread(_set_sync)
         return
+
+
+async def reset_stale_check_statuses() -> int:
+    """서버 재시작으로 대기열이 날아간 뒤에도 queued/running으로 남은 상태를 정리."""
+    if not uses_firestore():
+        return 0
+
+    def _reset_sync():
+        count = 0
+        for doc in _firestore().collection("users").stream():
+            status = (doc.to_dict() or {}).get("check_status") or {}
+            if status.get("state") in ("queued", "running"):
+                doc.reference.set({
+                    "check_status": {
+                        "state": "error",
+                        "message": "서버가 재시작되어 이전 순위 체크가 중단되었습니다. 다시 실행해주세요.",
+                        "updated_at": _now_text(),
+                    }
+                }, merge=True)
+                count += 1
+        return count
+
+    try:
+        return await asyncio.to_thread(_reset_sync)
+    except Exception as exc:
+        # Firebase 설정 문제로 실패해도 서버 기동은 막지 않음 (init_db와 동일한 방침)
+        print(f"체크 상태 리셋 실패 (무시): {exc}")
+        return 0
 
 
 async def consume_manual_check_quota(user_id: str | None, date: str, limit: int) -> dict:
@@ -624,7 +655,7 @@ async def get_rankings(
     owner_uid = _user_id(user_id)
     if uses_firestore():
         def _get_sync():
-            cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+            cutoff = (datetime.now(KST) - timedelta(days=days)).strftime("%Y-%m-%d")
             place_map = {
                 row["place_id"]: row.get("place_name", "")
                 for row in [_doc.to_dict() for _doc in _user_doc(owner_uid).collection("places").stream()]
