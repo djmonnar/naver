@@ -126,6 +126,91 @@ async def _extract_dom_results(frame, limit: int) -> list[dict]:
     return results
 
 
+def _merge_results(target: list[dict], rows: list[dict], seen: set[str], limit: int) -> None:
+    for row in rows:
+        place_id = str(row.get("place_id") or "").strip()
+        place_name = _clean_place_name(row.get("place_name") or "")
+        key = place_id or place_name
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        target.append({
+            "rank": len(target) + 1,
+            "place_id": place_id,
+            "place_name": place_name,
+        })
+        if len(target) >= limit:
+            break
+
+
+async def _scroll_result_lists(frame) -> dict:
+    return await frame.evaluate("""
+        () => {
+            const candidates = [
+                document.scrollingElement,
+                document.documentElement,
+                document.body,
+                ...document.querySelectorAll('div, section, main, ul, ol, [role="list"]')
+            ].filter(Boolean);
+            let moved = false;
+            let signature = [];
+
+            for (const el of candidates) {
+                const max = Math.max(0, el.scrollHeight - el.clientHeight);
+                if (max < 40) continue;
+                const before = el.scrollTop;
+                const step = Math.max(500, Math.round((el.clientHeight || 700) * 0.85));
+                el.scrollTop = Math.min(max, before + step);
+                if (el.scrollTop !== before) moved = true;
+                signature.push(`${Math.round(el.scrollTop)}/${Math.round(max)}`);
+            }
+
+            window.scrollBy(0, 700);
+            return {
+                moved,
+                y: Math.round(window.scrollY || 0),
+                height: Math.round(document.body?.scrollHeight || 0),
+                signature: signature.slice(0, 12).join('|')
+            };
+        }
+    """)
+
+
+async def _collect_results_from_frame(frame, limit: int) -> list[dict]:
+    results = []
+    seen = set()
+    stagnant = 0
+    previous_count = 0
+    previous_signature = ""
+
+    for _ in range(40):
+        content = await frame.content()
+        _merge_results(results, _extract_json_results(content, limit), seen, limit)
+        if len(results) < limit:
+            _merge_results(results, await _extract_dom_results(frame, limit), seen, limit)
+        if len(results) >= limit:
+            break
+
+        try:
+            scroll_state = await _scroll_result_lists(frame)
+        except Exception:
+            break
+
+        signature = f"{scroll_state.get('y')}|{scroll_state.get('height')}|{scroll_state.get('signature')}"
+        if len(results) == previous_count and signature == previous_signature:
+            stagnant += 1
+        else:
+            stagnant = 0
+        if stagnant >= 5 or not scroll_state.get("moved"):
+            break
+
+        previous_count = len(results)
+        previous_signature = signature
+        await asyncio.sleep(random.uniform(0.8, 1.4))
+
+    return results
+
+
 async def search_keyword_results(keyword: str, limit: int = TOP_LIST_LIMIT) -> list[dict]:
     async with async_playwright() as p:
         browser = await p.chromium.launch(
@@ -173,22 +258,7 @@ async def search_keyword_results(keyword: str, limit: int = TOP_LIST_LIMIT) -> l
             if not frame:
                 frame = page
 
-            prev_height = 0
-            for scroll in range(20):
-                try:
-                    curr_height = await frame.evaluate("document.body.scrollHeight")
-                    if curr_height == prev_height and scroll > 3:
-                        break
-                    prev_height = curr_height
-                    await frame.evaluate("window.scrollBy(0, 800)")
-                    await asyncio.sleep(random.uniform(0.8, 1.5))
-                except Exception:
-                    break
-
-            content = await frame.content()
-            results = _extract_json_results(content, limit)
-            if not results:
-                results = await _extract_dom_results(frame, limit)
+            results = await _collect_results_from_frame(frame, limit)
 
             print(f"  TOP 목록 {len(results)}개 수집")
             return results
@@ -252,83 +322,16 @@ async def search_place_rank(keyword: str, target_place_id: str) -> int:
             print(f"  iframe: {frame.url}")
             await asyncio.sleep(2)
 
-            prev_height = 0
-            for scroll in range(20):
-                try:
-                    curr_height = await frame.evaluate("document.body.scrollHeight")
-                    if curr_height == prev_height and scroll > 3:
-                        break
-                    prev_height = curr_height
-                    await frame.evaluate("window.scrollBy(0, 800)")
-                    await asyncio.sleep(random.uniform(0.8, 1.5))
-                except:
+            results = await _collect_results_from_frame(frame, MAX_RANK)
+            print(f"  목록에서 {len(results)}개 플레이스 발견")
+            for row in results:
+                place_id = row.get("place_id")
+                real_rank = int(row.get("rank") or 0)
+                print(f"  {real_rank}위: {place_id}")
+                if place_id == target_place_id:
+                    rank = real_rank
+                    print(f"  ✅ 발견! 실제 {rank}위")
                     break
-
-            content = await frame.content()
-            pattern = r'"(?:RestaurantListSummary|PlaceListSummary|CafeListSummary|HotelListSummary):(\d+):\d+"'
-            matches = re.findall(pattern, content)
-
-            if matches:
-                print(f"  JSON에서 {len(matches)}개 플레이스 발견")
-                real_rank = 0
-                seen = []
-                for place_id in matches:
-                    if place_id in seen:
-                        continue
-                    seen.append(place_id)
-
-                    ad_pattern = f'"id":"{place_id}".*?"isAd":true'
-                    is_ad = bool(re.search(ad_pattern, content))
-
-                    if is_ad:
-                        print(f"  ⚡ 광고 건너뜀: {place_id}")
-                        continue
-
-                    real_rank += 1
-                    print(f"  {real_rank}위: {place_id}")
-
-                    if place_id == target_place_id:
-                        rank = real_rank
-                        print(f"  ✅ 발견! 실제 {rank}위")
-                        break
-
-                    if real_rank >= MAX_RANK:
-                        break
-
-            if rank == -1:
-                print(f"  JSON 방법 실패, li 태그 방법 시도")
-                items = []
-                for selector in ["li.UEzoS", "li[data-laim-exp-id]", "li.VLTHu", "li.CHC5F"]:
-                    items = await frame.query_selector_all(selector)
-                    if items:
-                        print(f"  {len(items)}개 li 항목 발견")
-                        break
-
-                real_rank = 0
-                for item in items:
-                    item_html = await item.inner_html()
-
-                    is_ad = False
-                    ad_spans = await item.query_selector_all("span.place_blind")
-                    for span in ad_spans:
-                        text = await span.inner_text()
-                        if "광고" in text:
-                            is_ad = True
-                            break
-
-                    if is_ad:
-                        print(f"  ⚡ 광고 건너뜀")
-                        continue
-
-                    real_rank += 1
-
-                    if target_place_id in item_html:
-                        rank = real_rank
-                        print(f"  ✅ li에서 발견! {rank}위")
-                        break
-
-                    if real_rank >= MAX_RANK:
-                        break
 
             if rank == -1:
                 print(f"  못찾음 → 100위 밖")

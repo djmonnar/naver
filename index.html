@@ -405,6 +405,11 @@
       white-space: nowrap;
     }
 
+    .top-toggle {
+      width: 100%;
+      margin-top: 12px;
+    }
+
     .current-list,
     .item-list {
       display: grid;
@@ -441,6 +446,11 @@
       color: var(--blue);
       font-weight: 900;
       font-size: 18px;
+    }
+
+    .current-rank.pending {
+      color: var(--muted);
+      font-size: 14px;
     }
 
     .manage-grid {
@@ -698,6 +708,7 @@
           </thead>
           <tbody id="topRows"></tbody>
         </table>
+        <button id="topToggle" class="text-button top-toggle hidden" type="button">전체 보기</button>
       </section>
     </div>
 
@@ -800,6 +811,7 @@
       checkStatus: null,
       selectedPlaceId: "",
       selectedKeyword: "",
+      topExpanded: false,
       activeRange: "7",
       unsubscribers: []
     };
@@ -818,8 +830,13 @@
     });
     $("keywordSelect").addEventListener("change", (event) => {
       state.selectedKeyword = event.target.value;
+      state.topExpanded = false;
       saveSelection();
       render();
+    });
+    $("topToggle").addEventListener("click", () => {
+      state.topExpanded = !state.topExpanded;
+      renderTopResults();
     });
     $("placeForm").addEventListener("submit", addPlace);
     $("keywordForm").addEventListener("submit", addKeyword);
@@ -1238,12 +1255,15 @@
         .filter((row) => row.date === latestDate)
         .sort((a, b) => Number(a.rank || 999) - Number(b.rank || 999))
         .slice(0, 30);
+      const visibleRows = state.topExpanded ? latestRows : latestRows.slice(0, 10);
 
       $("topDate").classList.toggle("hidden", !latestDate);
-      $("topDate").textContent = latestDate ? `${mmdd(latestDate)} 기준` : "";
+      $("topDate").textContent = latestDate ? `${mmdd(latestDate)} 기준 · ${latestRows.length}개` : "";
       $("topEmpty").classList.toggle("hidden", latestRows.length > 0);
       $("topTable").classList.toggle("hidden", latestRows.length === 0);
-      $("topRows").innerHTML = latestRows.map((row) => {
+      $("topToggle").classList.toggle("hidden", latestRows.length <= 10);
+      $("topToggle").textContent = state.topExpanded ? "10개만 보기" : `전체 ${latestRows.length}개 보기`;
+      $("topRows").innerHTML = visibleRows.map((row) => {
         const rank = Number(row.rank || 0);
         const rankClass = rank <= 3 ? `rank-${rank}` : "rank-other";
         const target = row.place_id === state.selectedPlaceId ? "target" : "";
@@ -1257,18 +1277,19 @@
     }
 
     function renderCurrentRankings() {
-      const latest = latestRankings();
+      const latest = currentRankingRows();
       $("currentEmpty").classList.toggle("hidden", latest.length > 0);
       $("currentRows").classList.toggle("hidden", latest.length === 0);
       $("currentRows").innerHTML = latest.map((row) => {
         const place = state.places.find((item) => item.place_id === row.place_id);
+        const rankClass = row.pending ? "current-rank pending" : "current-rank";
         return `
           <div class="current-row">
             <div class="current-main">
               <div class="current-name">${escapeHtml(place?.place_name || row.place_id || "-")}</div>
-              <div class="current-sub">${escapeHtml(row.keyword || "-")} · ${escapeHtml(row.date || "-")}</div>
+              <div class="current-sub">${escapeHtml(row.keyword || "-")} · ${escapeHtml(row.date || "아직 체크 전")}</div>
             </div>
-            <div class="current-rank">${formatRank(row.rank)}</div>
+            <div class="${rankClass}">${row.pending ? "체크 전" : formatRank(row.rank)}</div>
           </div>
         `;
       }).join("");
@@ -1393,6 +1414,24 @@
         if (keywordSort) return keywordSort;
         return (Number(a.rank) || 999) - (Number(b.rank) || 999);
       });
+    }
+
+    function currentRankingRows() {
+      const latestByKey = new Map(latestRankings().map((row) => [`${row.place_id || ""}|${row.keyword || ""}`, row]));
+      const rows = [];
+      state.keywords.forEach((keyword) => {
+        state.places.forEach((place) => {
+          const key = `${place.place_id || ""}|${keyword.keyword || ""}`;
+          rows.push(latestByKey.get(key) || {
+            place_id: place.place_id,
+            keyword: keyword.keyword,
+            rank: null,
+            date: "",
+            pending: true
+          });
+        });
+      });
+      return rows;
     }
 
     function keywordDocId(keyword) {
