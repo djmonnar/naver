@@ -27,6 +27,11 @@ def _keyword_doc_id(keyword: str) -> str:
     return encoded.rstrip("=")
 
 
+def _place_keyword_doc_id(place_id: str, keyword: str) -> str:
+    place_key = base64.urlsafe_b64encode(str(place_id).encode("utf-8")).decode("ascii").rstrip("=")
+    return f"{place_key}_{_keyword_doc_id(keyword)}"
+
+
 async def init_db():
     if uses_firestore():
         # Defer Firebase Admin initialization until an authenticated request or
@@ -48,9 +53,10 @@ async def init_db():
             CREATE TABLE IF NOT EXISTS keywords (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 owner_uid TEXT NOT NULL DEFAULT 'default',
+                place_id TEXT NOT NULL DEFAULT '',
                 keyword TEXT NOT NULL,
                 created_at TEXT DEFAULT (datetime('now','localtime')),
-                UNIQUE(owner_uid, keyword)
+                UNIQUE(owner_uid, place_id, keyword)
             )
         """)
         await db.execute("""
@@ -79,9 +85,11 @@ async def init_db():
 
         await _ensure_column(db, "places", "owner_uid", "TEXT NOT NULL DEFAULT 'default'")
         await _ensure_column(db, "keywords", "owner_uid", "TEXT NOT NULL DEFAULT 'default'")
+        await _ensure_column(db, "keywords", "place_id", "TEXT NOT NULL DEFAULT ''")
         await _ensure_column(db, "rankings", "owner_uid", "TEXT NOT NULL DEFAULT 'default'")
         await _ensure_column(db, "keyword_results", "owner_uid", "TEXT NOT NULL DEFAULT 'default'")
         await _rebuild_keywords_if_global_unique(db)
+        await _rebuild_keywords_if_missing_place_unique(db)
 
         await db.execute("""
             DELETE FROM places
@@ -92,7 +100,7 @@ async def init_db():
         await db.execute("""
             DELETE FROM keywords
             WHERE id NOT IN (
-                SELECT MAX(id) FROM keywords GROUP BY owner_uid, keyword
+                SELECT MAX(id) FROM keywords GROUP BY owner_uid, place_id, keyword
             )
         """)
         await db.execute("""
@@ -113,8 +121,8 @@ async def init_db():
             ON places(owner_uid, place_id)
         """)
         await db.execute("""
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_keywords_owner_keyword
-            ON keywords(owner_uid, keyword)
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_keywords_owner_place_keyword
+            ON keywords(owner_uid, place_id, keyword)
         """)
         await db.execute("""
             CREATE UNIQUE INDEX IF NOT EXISTS idx_rankings_owner_date
@@ -167,6 +175,39 @@ async def _rebuild_keywords_if_global_unique(db: aiosqlite.Connection) -> None:
     await db.execute("""
         INSERT OR IGNORE INTO keywords (id, owner_uid, keyword, created_at)
         SELECT id, COALESCE(owner_uid, 'default'), keyword, created_at
+        FROM keywords_old
+    """)
+    await db.execute("DROP TABLE keywords_old")
+
+
+async def _rebuild_keywords_if_missing_place_unique(db: aiosqlite.Connection) -> None:
+    async with db.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='keywords'"
+    ) as cursor:
+        row = await cursor.fetchone()
+    table_sql = (row[0] or "").lower() if row else ""
+    has_place_unique = (
+        "unique(owner_uid, place_id, keyword)" in table_sql
+        or "unique (owner_uid, place_id, keyword)" in table_sql
+    )
+
+    if has_place_unique:
+        return
+
+    await db.execute("ALTER TABLE keywords RENAME TO keywords_old")
+    await db.execute("""
+        CREATE TABLE keywords (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            owner_uid TEXT NOT NULL DEFAULT 'default',
+            place_id TEXT NOT NULL DEFAULT '',
+            keyword TEXT NOT NULL,
+            created_at TEXT DEFAULT (datetime('now','localtime')),
+            UNIQUE(owner_uid, place_id, keyword)
+        )
+    """)
+    await db.execute("""
+        INSERT OR IGNORE INTO keywords (id, owner_uid, place_id, keyword, created_at)
+        SELECT id, COALESCE(owner_uid, 'default'), COALESCE(place_id, ''), keyword, created_at
         FROM keywords_old
     """)
     await db.execute("DROP TABLE keywords_old")
@@ -309,6 +350,14 @@ async def delete_place(place_id: str, user_id: str | None = None):
             )
             for doc in rankings:
                 batch.delete(doc.reference)
+            keywords = (
+                _user_doc(owner_uid)
+                .collection("keywords")
+                .where("place_id", "==", place_id)
+                .stream()
+            )
+            for doc in keywords:
+                batch.delete(doc.reference)
             batch.commit()
 
         await asyncio.to_thread(_delete_sync)
@@ -323,6 +372,10 @@ async def delete_place(place_id: str, user_id: str | None = None):
             "DELETE FROM rankings WHERE owner_uid = ? AND place_id = ?",
             (owner_uid, place_id),
         )
+        await db.execute(
+            "DELETE FROM keywords WHERE owner_uid = ? AND place_id = ?",
+            (owner_uid, place_id),
+        )
         await db.commit()
 
 
@@ -331,7 +384,7 @@ async def get_keywords(user_id: str | None = None):
     if uses_firestore():
         def _get_sync():
             docs = _user_doc(owner_uid).collection("keywords").stream()
-            rows = [doc.to_dict() for doc in docs]
+            rows = [{"id": doc.id, **(doc.to_dict() or {})} for doc in docs]
             return sorted(rows, key=lambda row: row.get("created_at", ""), reverse=True)
 
         return await asyncio.to_thread(_get_sync)
@@ -345,13 +398,16 @@ async def get_keywords(user_id: str | None = None):
             return [dict(row) for row in await cursor.fetchall()]
 
 
-async def add_keyword(keyword: str, user_id: str | None = None):
+async def add_keyword(keyword: str, user_id: str | None = None, place_id: str | None = None):
     owner_uid = _user_id(user_id)
+    place_key = str(place_id or "")
     if uses_firestore():
         def _add_sync():
             _ensure_firestore_user_sync(owner_uid)
-            _user_doc(owner_uid).collection("keywords").document(_keyword_doc_id(keyword)).set({
+            doc_id = _place_keyword_doc_id(place_key, keyword) if place_key else _keyword_doc_id(keyword)
+            _user_doc(owner_uid).collection("keywords").document(doc_id).set({
                 "keyword": keyword,
+                "place_id": place_key,
                 "created_at": _now_text(),
             }, merge=True)
 
@@ -360,24 +416,31 @@ async def add_keyword(keyword: str, user_id: str | None = None):
 
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
-            "INSERT OR IGNORE INTO keywords (owner_uid, keyword) VALUES (?, ?)",
-            (owner_uid, keyword),
+            "INSERT OR IGNORE INTO keywords (owner_uid, place_id, keyword) VALUES (?, ?, ?)",
+            (owner_uid, place_key, keyword),
         )
         await db.commit()
 
 
-async def delete_keyword(keyword: str, user_id: str | None = None):
+async def delete_keyword(keyword: str, user_id: str | None = None, place_id: str | None = None):
     owner_uid = _user_id(user_id)
+    place_key = str(place_id or "")
     if uses_firestore():
         def _delete_sync():
             batch = _firestore().batch()
-            batch.delete(_user_doc(owner_uid).collection("keywords").document(_keyword_doc_id(keyword)))
-            rankings = (
+            collection = _user_doc(owner_uid).collection("keywords")
+            doc_id = _place_keyword_doc_id(place_key, keyword) if place_key else _keyword_doc_id(keyword)
+            batch.delete(collection.document(doc_id))
+            if place_key:
+                batch.delete(collection.document(_keyword_doc_id(keyword)))
+            rankings_query = (
                 _user_doc(owner_uid)
                 .collection("rankings")
                 .where("keyword", "==", keyword)
-                .stream()
             )
+            if place_key:
+                rankings_query = rankings_query.where("place_id", "==", place_key)
+            rankings = rankings_query.stream()
             for doc in rankings:
                 batch.delete(doc.reference)
             batch.commit()
@@ -386,18 +449,24 @@ async def delete_keyword(keyword: str, user_id: str | None = None):
         return
 
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            "DELETE FROM keywords WHERE owner_uid = ? AND keyword = ?",
-            (owner_uid, keyword),
-        )
-        await db.execute(
-            "DELETE FROM rankings WHERE owner_uid = ? AND keyword = ?",
-            (owner_uid, keyword),
-        )
-        await db.execute(
-            "DELETE FROM keyword_results WHERE owner_uid = ? AND keyword = ?",
-            (owner_uid, keyword),
-        )
+        if place_key:
+            await db.execute(
+                "DELETE FROM keywords WHERE owner_uid = ? AND place_id = ? AND keyword = ?",
+                (owner_uid, place_key, keyword),
+            )
+            await db.execute(
+                "DELETE FROM rankings WHERE owner_uid = ? AND place_id = ? AND keyword = ?",
+                (owner_uid, place_key, keyword),
+            )
+        else:
+            await db.execute(
+                "DELETE FROM keywords WHERE owner_uid = ? AND keyword = ?",
+                (owner_uid, keyword),
+            )
+            await db.execute(
+                "DELETE FROM rankings WHERE owner_uid = ? AND keyword = ?",
+                (owner_uid, keyword),
+            )
         await db.commit()
 
 

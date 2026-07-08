@@ -757,6 +757,7 @@
       <div class="manage-panel">
         <h3 class="panel-title">키워드</h3>
         <form action="/keywords/add" method="post">
+          <input type="hidden" name="place_id" value="{{ selected_place_id }}">
           <div class="form-row">
             <input name="keyword" placeholder="검색 키워드" required>
             <button type="submit" class="primary-button">추가</button>
@@ -767,6 +768,7 @@
           <div class="item-row">
             <div class="item-text">{{ kw.keyword }}</div>
             <form action="/keywords/delete" method="post">
+              <input type="hidden" name="place_id" value="{{ selected_place_id }}">
               <input type="hidden" name="keyword" value="{{ kw.keyword }}">
               <button type="submit" class="delete-button">삭제</button>
             </form>

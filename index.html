@@ -818,6 +818,7 @@
 
         <div class="manage-panel">
           <h3 class="panel-title">키워드</h3>
+          <p id="keywordPanelHint" class="status-line">플레이스 선택 대기</p>
           <form id="keywordForm">
             <div class="form-row">
               <input id="keywordInput" name="keyword" placeholder="검색 키워드" required>
@@ -1050,9 +1051,10 @@
     }
 
     function upsertKeywordState(item) {
+      const itemKey = keywordRowKey(item);
       state.keywords = [
         item,
-        ...state.keywords.filter((row) => row.keyword !== item.keyword)
+        ...state.keywords.filter((row) => keywordRowKey(row) !== itemKey)
       ].sort((a, b) => (b.created_at || "").localeCompare(a.created_at || ""));
       state.selectedKeyword = item.keyword;
     }
@@ -1068,13 +1070,17 @@
       return place;
     }
 
-    async function saveKeywordDoc(keyword) {
+    async function saveKeywordDoc(keyword, placeId = state.selectedPlaceId) {
+      const targetPlaceId = String(placeId || "").trim();
+      if (!targetPlaceId) throw new Error("place_required");
       const item = {
         keyword,
+        place_id: targetPlaceId,
         created_at: nowText()
       };
-      await setDoc(doc(db, "users", state.user.uid, "keywords", keywordDocId(keyword)), item, { merge: true });
-      upsertKeywordState(item);
+      const docId = placeKeywordDocId(targetPlaceId, keyword);
+      await setDoc(doc(db, "users", state.user.uid, "keywords", docId), item, { merge: true });
+      upsertKeywordState({ id: docId, ...item });
       return item;
     }
 
@@ -1082,6 +1088,7 @@
       const placeId = $("placeIdInput").value.trim();
       const placeName = $("placeNameInput").value.trim();
       const keyword = $("keywordInput").value.trim();
+      const targetPlaceId = placeId || state.selectedPlaceId;
       let saved = false;
 
       if (placeId && placeName) {
@@ -1091,7 +1098,7 @@
       }
 
       if (keyword) {
-        await saveKeywordDoc(keyword);
+        await saveKeywordDoc(keyword, targetPlaceId);
         $("keywordForm").reset();
         saved = true;
       }
@@ -1177,9 +1184,13 @@
       if (!state.user) return;
       const keyword = $("keywordInput").value.trim();
       if (!keyword) return;
+      if (!state.selectedPlaceId) {
+        showToast("키워드를 연결할 플레이스를 먼저 선택해주세요.");
+        return;
+      }
 
       try {
-        await saveKeywordDoc(keyword);
+        await saveKeywordDoc(keyword, state.selectedPlaceId);
         event.target.reset();
         render();
         showToast("키워드를 저장했습니다.");
@@ -1194,9 +1205,10 @@
       showToast("플레이스를 삭제했습니다.");
     }
 
-    async function deleteKeyword(keyword) {
+    async function deleteKeyword(keywordId, keyword, placeId) {
       if (!state.user) return;
-      await deleteDoc(doc(db, "users", state.user.uid, "keywords", keywordDocId(keyword)));
+      const docId = keywordId || placeKeywordDocId(placeId || legacyKeywordPlaceId(), keyword);
+      await deleteDoc(doc(db, "users", state.user.uid, "keywords", docId));
       showToast("키워드를 삭제했습니다.");
     }
 
@@ -1215,8 +1227,8 @@
         return;
       }
 
-      if (!state.places.length || !state.keywords.length) {
-        showToast("플레이스와 키워드를 먼저 추가해주세요.");
+      if (!configuredKeywordPairs().length) {
+        showToast("플레이스별 키워드를 먼저 추가해주세요.");
         return;
       }
 
@@ -1277,6 +1289,7 @@
     }
 
     function renderSelectors() {
+      const selectedKeywords = keywordsForSelectedPlace();
       $("placeSelect").innerHTML = state.places.length
         ? state.places.map((place) => {
           const selected = place.place_id === state.selectedPlaceId ? "selected" : "";
@@ -1285,13 +1298,13 @@
         : `<option value="">등록된 플레이스 없음</option>`;
       $("placeSelect").disabled = !state.places.length;
 
-      $("keywordSelect").innerHTML = state.keywords.length
-        ? state.keywords.map((item) => {
+      $("keywordSelect").innerHTML = selectedKeywords.length
+        ? selectedKeywords.map((item) => {
           const selected = item.keyword === state.selectedKeyword ? "selected" : "";
           return `<option value="${escapeHtml(item.keyword)}" ${selected}>${escapeHtml(item.keyword)}</option>`;
         }).join("")
         : `<option value="">등록된 키워드 없음</option>`;
-      $("keywordSelect").disabled = !state.keywords.length;
+      $("keywordSelect").disabled = !selectedKeywords.length;
     }
 
     function renderSummary() {
@@ -1450,16 +1463,27 @@
     }
 
     function renderManageLists() {
+      const selectedPlace = state.places.find((place) => place.place_id === state.selectedPlaceId);
+      const selectedKeywords = keywordsForSelectedPlace();
+      $("keywordPanelHint").textContent = selectedPlace
+        ? `${selectedPlace.place_name || selectedPlace.place_id} 전용 키워드`
+        : "플레이스 선택 대기";
       $("placeRows").innerHTML = state.places.map((place) => `
         <div class="item-row">
           <div class="item-text">${escapeHtml(place.place_name || place.place_id)}<small>${escapeHtml(place.place_id)}</small></div>
           <button type="button" class="delete-button" data-place-id="${escapeHtml(place.place_id)}">삭제</button>
         </div>
       `).join("");
-      $("keywordRows").innerHTML = state.keywords.map((item) => `
+      $("keywordRows").innerHTML = selectedKeywords.map((item) => `
         <div class="item-row">
           <div class="item-text">${escapeHtml(item.keyword)}</div>
-          <button type="button" class="delete-button" data-keyword="${escapeHtml(item.keyword)}">삭제</button>
+          <button
+            type="button"
+            class="delete-button"
+            data-keyword-id="${escapeHtml(keywordDocumentId(item))}"
+            data-keyword="${escapeHtml(item.keyword)}"
+            data-keyword-place-id="${escapeHtml(keywordPlaceId(item))}"
+          >삭제</button>
         </div>
       `).join("");
 
@@ -1467,7 +1491,11 @@
         button.addEventListener("click", () => deletePlace(button.dataset.placeId));
       });
       $("keywordRows").querySelectorAll("[data-keyword]").forEach((button) => {
-        button.addEventListener("click", () => deleteKeyword(button.dataset.keyword));
+        button.addEventListener("click", () => deleteKeyword(
+          button.dataset.keywordId,
+          button.dataset.keyword,
+          button.dataset.keywordPlaceId
+        ));
       });
     }
 
@@ -1536,11 +1564,11 @@
       }
 
       const hasPlaces = state.places.length > 0;
-      const hasKeywords = state.keywords.length > 0;
+      const hasKeywords = configuredKeywordPairs().length > 0;
       if (hasPlaces && hasKeywords) {
         $("checkStatusText").textContent = "Render 서버로 즉시 실행 가능";
       } else if (hasPlaces) {
-        $("checkStatusText").textContent = "키워드 저장 대기";
+        $("checkStatusText").textContent = "플레이스별 키워드 저장 대기";
       } else if (hasKeywords) {
         $("checkStatusText").textContent = "플레이스 저장 대기";
       } else {
@@ -1572,10 +1600,57 @@
       if (!state.places.some((place) => place.place_id === state.selectedPlaceId)) {
         state.selectedPlaceId = state.places[0]?.place_id || "";
       }
-      if (!state.keywords.some((item) => item.keyword === state.selectedKeyword)) {
-        state.selectedKeyword = state.keywords[0]?.keyword || "";
+      const selectedKeywords = keywordsForSelectedPlace();
+      if (!selectedKeywords.some((item) => item.keyword === state.selectedKeyword)) {
+        state.selectedKeyword = selectedKeywords[0]?.keyword || "";
       }
       saveSelection();
+    }
+
+    function legacyKeywordPlaceId() {
+      if (!state.places.length) return "";
+      return [...state.places]
+        .sort((a, b) => (a.created_at || "").localeCompare(b.created_at || ""))[0]?.place_id || "";
+    }
+
+    function keywordPlaceId(item) {
+      return String(item?.place_id || "").trim() || legacyKeywordPlaceId();
+    }
+
+    function keywordRowKey(item) {
+      return `${keywordPlaceId(item)}|${item?.keyword || ""}`;
+    }
+
+    function keywordDocumentId(item) {
+      return item?.id || placeKeywordDocId(keywordPlaceId(item), item?.keyword || "");
+    }
+
+    function keywordsForPlace(placeId) {
+      return state.keywords
+        .filter((item) => keywordPlaceId(item) === placeId)
+        .sort((a, b) => (b.created_at || "").localeCompare(a.created_at || ""));
+    }
+
+    function keywordsForSelectedPlace() {
+      return keywordsForPlace(state.selectedPlaceId);
+    }
+
+    function configuredKeywordPairs() {
+      const placeIds = new Set(state.places.map((place) => place.place_id));
+      const seen = new Set();
+      return state.keywords
+        .map((item) => ({
+          place_id: keywordPlaceId(item),
+          keyword: item.keyword,
+          item
+        }))
+        .filter((pair) => {
+          if (!pair.place_id || !pair.keyword || !placeIds.has(pair.place_id)) return false;
+          const key = `${pair.place_id}|${pair.keyword}`;
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
     }
 
     function selectedRankRows() {
@@ -1609,39 +1684,34 @@
 
     function latestRankings() {
       const byKey = new Map();
-      const placeIds = new Set(state.places.map((place) => place.place_id));
-      const keywordNames = new Set(state.keywords.map((item) => item.keyword));
+      const pairKeys = new Set(configuredKeywordPairs().map((pair) => `${pair.place_id}|${pair.keyword}`));
       state.rankings.forEach((row) => {
-        if (!placeIds.has(row.place_id) || !keywordNames.has(row.keyword)) return;
         const key = `${row.place_id || ""}|${row.keyword || ""}`;
+        if (!pairKeys.has(key)) return;
         const current = byKey.get(key);
         const stamp = `${row.date || ""} ${row.checked_at || ""}`;
         const currentStamp = `${current?.date || ""} ${current?.checked_at || ""}`;
         if (!current || stamp > currentStamp) byKey.set(key, row);
       });
       return [...byKey.values()].sort((a, b) => {
-        const keywordSort = (a.keyword || "").localeCompare(b.keyword || "");
-        if (keywordSort) return keywordSort;
+        const placeSort = (a.place_id || "").localeCompare(b.place_id || "");
+        if (placeSort) return placeSort;
         return (Number(a.rank) || 999) - (Number(b.rank) || 999);
       });
     }
 
     function currentRankingRows() {
       const latestByKey = new Map(latestRankings().map((row) => [`${row.place_id || ""}|${row.keyword || ""}`, row]));
-      const rows = [];
-      state.keywords.forEach((keyword) => {
-        state.places.forEach((place) => {
-          const key = `${place.place_id || ""}|${keyword.keyword || ""}`;
-          rows.push(latestByKey.get(key) || {
-            place_id: place.place_id,
-            keyword: keyword.keyword,
-            rank: null,
-            date: "",
-            pending: true
-          });
-        });
+      return configuredKeywordPairs().map((pair) => {
+        const key = `${pair.place_id || ""}|${pair.keyword || ""}`;
+        return latestByKey.get(key) || {
+          place_id: pair.place_id,
+          keyword: pair.keyword,
+          rank: null,
+          date: "",
+          pending: true
+        };
       });
-      return rows;
     }
 
     function keywordDocId(keyword) {
@@ -1649,6 +1719,10 @@
       let binary = "";
       bytes.forEach((byte) => binary += String.fromCharCode(byte));
       return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    }
+
+    function placeKeywordDocId(placeId, keyword) {
+      return `${keywordDocId(String(placeId || ""))}_${keywordDocId(keyword)}`;
     }
 
     function saveSelection() {

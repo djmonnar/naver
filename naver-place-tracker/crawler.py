@@ -604,6 +604,40 @@ async def _set_check_progress(user_id: str, message: str, details: dict | None =
         print(f"  체크 상태 업데이트 실패: {exc}")
 
 
+def _legacy_keyword_place_id(places: list[dict]) -> str:
+    if not places:
+        return ""
+    oldest = min(places, key=lambda row: row.get("created_at") or "")
+    return str(oldest.get("place_id") or "")
+
+
+def _build_place_keyword_pairs(places: list[dict], keywords: list[dict]) -> list[dict]:
+    places_by_id = {str(place.get("place_id") or ""): place for place in places}
+    legacy_place_id = _legacy_keyword_place_id(places)
+    pairs = []
+    seen = set()
+
+    for keyword_row in keywords:
+        keyword = str(keyword_row.get("keyword") or "").strip()
+        if not keyword:
+            continue
+        place_id = str(keyword_row.get("place_id") or "").strip() or legacy_place_id
+        place = places_by_id.get(place_id)
+        if not place:
+            continue
+        key = (place_id, keyword)
+        if key in seen:
+            continue
+        seen.add(key)
+        pairs.append({
+            "place": place,
+            "keyword": keyword,
+            "keyword_row": keyword_row,
+        })
+
+    return pairs
+
+
 async def run_daily_check(user_id: str | None = None):
     today = datetime.now().strftime("%Y-%m-%d")
     user_ids = [user_id] if user_id else await database.list_user_ids()
@@ -626,20 +660,25 @@ async def run_daily_check(user_id: str | None = None):
     for owner_uid in user_ids:
         places = await database.get_places(owner_uid)
         keywords = await database.get_keywords(owner_uid)
+        place_keyword_pairs = _build_place_keyword_pairs(places, keywords)
 
-        if not places or not keywords:
-            print(f"사용자 {owner_uid}: 등록된 플레이스 또는 키워드 없음")
+        if not places or not place_keyword_pairs:
+            print(f"사용자 {owner_uid}: 등록된 플레이스 또는 플레이스별 키워드 없음")
             summary["skipped_users"] += 1
             continue
 
         summary["checked_users"] += 1
         summary["places"] += len(places)
-        summary["keywords"] += len(keywords)
+        summary["keywords"] += len(place_keyword_pairs)
 
-        total_keywords = len(keywords)
+        pairs_by_keyword: dict[str, list[dict]] = {}
+        for pair in place_keyword_pairs:
+            pairs_by_keyword.setdefault(pair["keyword"], []).append(pair)
 
-        for keyword_index, keyword_row in enumerate(keywords, start=1):
-            keyword = keyword_row["keyword"]
+        unique_keywords = list(pairs_by_keyword.keys())
+        total_keywords = len(unique_keywords)
+
+        for keyword_index, keyword in enumerate(unique_keywords, start=1):
             await _set_check_progress(
                 owner_uid,
                 f"{keyword} TOP 30 수집 중 ({keyword_index}/{total_keywords})",
@@ -657,7 +696,8 @@ async def run_daily_check(user_id: str | None = None):
                 summary["keyword_results_saved"] += len(keyword_results)
             rank_by_place_id, rank_by_name = _build_rank_indexes(keyword_results)
 
-            for place in places:
+            for pair in pairs_by_keyword[keyword]:
+                place = pair["place"]
                 place_id = place["place_id"]
                 place_name = place["place_name"]
                 print(f"  사용자 {owner_uid} 체크 중: [{keyword}] {place_name}({place_id})")

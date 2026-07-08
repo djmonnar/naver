@@ -17,7 +17,7 @@ from firebase_config import get_admin_app, get_data_backend, get_web_config, use
 app = FastAPI(title="네이버 플레이스 순위 트래커 + 연해주 예약")
 templates = Jinja2Templates(directory="templates")
 scheduler = AsyncIOScheduler(timezone="Asia/Seoul")
-APP_VERSION = "place-id-finder-20260708"
+APP_VERSION = "place-keyword-scope-20260708"
 RUNNING_RANK_CHECKS: set[str] = set()
 
 # CORS (예약 페이지용)
@@ -316,6 +316,47 @@ def _fallback_top_results(latest: list[dict], keyword: str | None, selected_plac
     return {"date": latest_date, "results": results}
 
 
+def _legacy_keyword_place_id(places: list[dict]) -> str:
+    if not places:
+        return ""
+    oldest = min(places, key=lambda row: row.get("created_at") or "")
+    return str(oldest.get("place_id") or "")
+
+
+def _keyword_place_id(keyword_row: dict, places: list[dict]) -> str:
+    return str(keyword_row.get("place_id") or "").strip() or _legacy_keyword_place_id(places)
+
+
+def _keywords_for_place(keywords: list[dict], places: list[dict], place_id: str | None) -> list[dict]:
+    target_place_id = str(place_id or "")
+    rows = [
+        row for row in keywords
+        if _keyword_place_id(row, places) == target_place_id
+    ]
+    return sorted(rows, key=lambda row: row.get("created_at", ""), reverse=True)
+
+
+def _configured_keyword_pairs(places: list[dict], keywords: list[dict]) -> list[dict]:
+    places_by_id = {str(place.get("place_id") or ""): place for place in places}
+    pairs = []
+    seen = set()
+    for keyword_row in keywords:
+        keyword = str(keyword_row.get("keyword") or "").strip()
+        place_id = _keyword_place_id(keyword_row, places)
+        if not keyword or place_id not in places_by_id:
+            continue
+        key = (place_id, keyword)
+        if key in seen:
+            continue
+        seen.add(key)
+        pairs.append({
+            "place": places_by_id[place_id],
+            "keyword": keyword,
+            "keyword_row": keyword_row,
+        })
+    return pairs
+
+
 @app.get("/", response_class=HTMLResponse)
 async def dashboard(
     request: Request,
@@ -327,12 +368,21 @@ async def dashboard(
     places = await database.get_places(user_id)
     keywords = await database.get_keywords(user_id)
     latest = await database.get_latest_rankings(user_id)
+    pair_keys = {
+        (pair["place"].get("place_id"), pair["keyword"])
+        for pair in _configured_keyword_pairs(places, keywords)
+    }
+    latest = [
+        row for row in latest
+        if (row.get("place_id"), row.get("keyword")) in pair_keys
+    ]
 
     selected_place = next((row for row in places if row.get("place_id") == place_id), places[0] if places else None)
-    selected_keyword = keyword if any(row.get("keyword") == keyword for row in keywords) else (
-        keywords[0]["keyword"] if keywords else None
-    )
     selected_place_id = selected_place.get("place_id") if selected_place else None
+    selected_keywords = _keywords_for_place(keywords, places, selected_place_id)
+    selected_keyword = keyword if any(row.get("keyword") == keyword for row in selected_keywords) else (
+        selected_keywords[0]["keyword"] if selected_keywords else None
+    )
 
     selected_rows = []
     if selected_place_id and selected_keyword:
@@ -358,9 +408,10 @@ async def dashboard(
     return templates.TemplateResponse("dashboard.html", {
         "request": request,
         "places": places,
-        "keywords": keywords,
+        "keywords": selected_keywords,
         "latest": latest,
         "selected_place": selected_place,
+        "selected_place_id": selected_place_id or "",
         "selected_keyword": selected_keyword,
         "summary": summary,
         "chart_points": chart_points,
@@ -382,15 +433,19 @@ async def del_place(request: Request, place_id: str = Form(...)):
     return RedirectResponse("/", status_code=303)
 
 @app.post("/keywords/add")
-async def add_keyword(request: Request, keyword: str = Form(...)):
-    if keyword.strip():
-        await database.add_keyword(keyword.strip(), auth.get_request_user(request)["uid"])
-    return RedirectResponse("/", status_code=303)
+async def add_keyword(request: Request, keyword: str = Form(...), place_id: str = Form("")):
+    target_place_id = place_id.strip()
+    if keyword.strip() and target_place_id:
+        await database.add_keyword(keyword.strip(), auth.get_request_user(request)["uid"], target_place_id)
+    suffix = f"?place_id={target_place_id}" if target_place_id else ""
+    return RedirectResponse(f"/{suffix}", status_code=303)
 
 @app.post("/keywords/delete")
-async def del_keyword(request: Request, keyword: str = Form(...)):
-    await database.delete_keyword(keyword, auth.get_request_user(request)["uid"])
-    return RedirectResponse("/", status_code=303)
+async def del_keyword(request: Request, keyword: str = Form(...), place_id: str = Form("")):
+    target_place_id = place_id.strip()
+    await database.delete_keyword(keyword, auth.get_request_user(request)["uid"], target_place_id)
+    suffix = f"?place_id={target_place_id}" if target_place_id else ""
+    return RedirectResponse(f"/{suffix}", status_code=303)
 
 @app.post("/check/now")
 async def check_now(request: Request, background_tasks: BackgroundTasks):
@@ -496,45 +551,48 @@ async def report(request: Request):
     user_id = auth.get_request_user(request)["uid"]
     places = await database.get_places(user_id)
     keywords = await database.get_keywords(user_id)
+    place_keyword_pairs = _configured_keyword_pairs(places, keywords)
     rankings_30 = await database.get_rankings(days=30, user_id=user_id)
     today = datetime.now().strftime("%Y년 %m월 %d일")
     chart_labels_set = sorted(set(r['date'] for r in rankings_30))
     chart_datasets = []
-    for place in places:
-        for kw in keywords:
-            label = f"{place['place_name']} | {kw['keyword']}"
-            data_map = {r['date']: r['rank'] for r in rankings_30
-                        if r['place_id'] == place['place_id'] and r['keyword'] == kw['keyword']}
-            chart_datasets.append({"label": label, "data": [data_map.get(d) for d in chart_labels_set]})
+    for pair in place_keyword_pairs:
+        place = pair["place"]
+        kw_name = pair["keyword"]
+        label = f"{place['place_name']} | {kw_name}"
+        data_map = {r['date']: r['rank'] for r in rankings_30
+                    if r['place_id'] == place['place_id'] and r['keyword'] == kw_name}
+        chart_datasets.append({"label": label, "data": [data_map.get(d) for d in chart_labels_set]})
     summary_by_kw = {}
-    for kw in keywords:
-        kw_name = kw['keyword']
-        for place in places:
-            rows = sorted([r for r in rankings_30 if r['place_id'] == place['place_id'] and r['keyword'] == kw_name],
-                          key=lambda x: x['date'], reverse=True)
-            today_rank = rows[0]['rank'] if rows else -1
-            prev_rank  = rows[1]['rank'] if len(rows) > 1 else None
-            week_rank  = rows[6]['rank'] if len(rows) > 6 else None
-            summary_by_kw[kw_name] = [
-                {"label": "오늘 순위", "rank": today_rank, "change": None},
-                {"label": "어제 순위", "rank": prev_rank or -1, "change": (today_rank-prev_rank) if (prev_rank and today_rank>0) else None},
-                {"label": "7일 전",   "rank": week_rank or -1, "change": (today_rank-week_rank) if (week_rank and today_rank>0) else None},
-            ]
+    for pair in place_keyword_pairs:
+        place = pair["place"]
+        kw_name = pair["keyword"]
+        rows = sorted([r for r in rankings_30 if r['place_id'] == place['place_id'] and r['keyword'] == kw_name],
+                      key=lambda x: x['date'], reverse=True)
+        today_rank = rows[0]['rank'] if rows else -1
+        prev_rank  = rows[1]['rank'] if len(rows) > 1 else None
+        week_rank  = rows[6]['rank'] if len(rows) > 6 else None
+        summary_by_kw[f"{place['place_name']} | {kw_name}"] = [
+            {"label": "오늘 순위", "rank": today_rank, "change": None},
+            {"label": "어제 순위", "rank": prev_rank or -1, "change": (today_rank-prev_rank) if (prev_rank and today_rank>0) else None},
+            {"label": "7일 전",   "rank": week_rank or -1, "change": (today_rank-week_rank) if (week_rank and today_rank>0) else None},
+        ]
     calendar = []
-    for place in places:
-        for kw in keywords:
-            rows = [r for r in rankings_30 if r['place_id']==place['place_id'] and r['keyword']==kw['keyword'] and r['rank']>0]
-            seen = {r['date']: r['rank'] for r in sorted(rows, key=lambda x: x['date'])}
-            if not seen: continue
-            dates_sorted = sorted(seen.keys())
-            days = []
-            for i, d in enumerate(dates_sorted):
-                rank = seen[d]
-                prev = seen[dates_sorted[i-1]] if i > 0 else None
-                days.append({"date": d[5:], "rank": rank, "change": (rank-prev) if prev else None})
-            calendar.append({"place_name": place['place_name'], "keyword": kw['keyword'], "days": days})
+    for pair in place_keyword_pairs:
+        place = pair["place"]
+        kw_name = pair["keyword"]
+        rows = [r for r in rankings_30 if r['place_id']==place['place_id'] and r['keyword']==kw_name and r['rank']>0]
+        seen = {r['date']: r['rank'] for r in sorted(rows, key=lambda x: x['date'])}
+        if not seen: continue
+        dates_sorted = sorted(seen.keys())
+        days = []
+        for i, d in enumerate(dates_sorted):
+            rank = seen[d]
+            prev = seen[dates_sorted[i-1]] if i > 0 else None
+            days.append({"date": d[5:], "rank": rank, "change": (rank-prev) if prev else None})
+        calendar.append({"place_name": place['place_name'], "keyword": kw_name, "days": days})
     return templates.TemplateResponse("report.html", {
-        "request": request, "places": places, "keywords": keywords,
+        "request": request, "places": places, "keywords": [{"keyword": key} for key in summary_by_kw.keys()],
         "today": today, "summary_by_kw": summary_by_kw, "calendar": calendar,
         "chart_data": {"labels": [l[5:] for l in chart_labels_set], "datasets": chart_datasets},
     })
