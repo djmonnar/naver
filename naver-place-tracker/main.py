@@ -149,7 +149,12 @@ async def session_login(request: Request, payload: SessionLogin):
     except Exception as exc:
         raise HTTPException(status_code=401, detail="Invalid Firebase ID token") from exc
 
-    await database.ensure_user(decoded["uid"], decoded.get("email"))
+    await database.ensure_user(
+        decoded["uid"],
+        decoded.get("email"),
+        decoded.get("name"),
+        decoded.get("picture"),
+    )
     response = JSONResponse({"status": "ok"})
     auth.set_session_cookie(response, request, session_cookie, expires_in)
     return response

@@ -181,17 +181,31 @@ def _user_doc(user_id: str):
     return _firestore().collection("users").document(_user_id(user_id))
 
 
-def _ensure_firestore_user_sync(user_id: str, email: str | None = None) -> None:
+def _ensure_firestore_user_sync(
+    user_id: str,
+    email: str | None = None,
+    name: str | None = None,
+    photo_url: str | None = None,
+) -> None:
     data = {"updated_at": _now_text()}
     if email:
         data["email"] = email
+    if name:
+        data["name"] = name
+    if photo_url:
+        data["photo_url"] = photo_url
     _user_doc(user_id).set(data, merge=True)
 
 
-async def ensure_user(user_id: str | None, email: str | None = None) -> None:
+async def ensure_user(
+    user_id: str | None,
+    email: str | None = None,
+    name: str | None = None,
+    photo_url: str | None = None,
+) -> None:
     owner_uid = _user_id(user_id)
     if uses_firestore():
-        await asyncio.to_thread(_ensure_firestore_user_sync, owner_uid, email)
+        await asyncio.to_thread(_ensure_firestore_user_sync, owner_uid, email, name, photo_url)
 
 
 async def list_user_ids() -> list[str]:

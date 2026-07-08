@@ -3,56 +3,1292 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta http-equiv="refresh" content="0; url=https://naver-place-tracker-production.up.railway.app/">
   <title>네이버 순위 기록기</title>
-  <link rel="canonical" href="https://naver-place-tracker-production.up.railway.app/">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
   <style>
+    @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;800;900&family=Space+Mono:wght@400;700&display=swap');
+
+    :root {
+      --bg: #f6f8fb;
+      --panel: #ffffff;
+      --soft: #eef3f8;
+      --line: #d8e0ea;
+      --line-soft: #e8edf4;
+      --text: #1e2532;
+      --muted: #728096;
+      --faint: #a8b2c2;
+      --blue: #3478f6;
+      --blue-soft: #e8f1ff;
+      --green: #55b783;
+      --green-soft: #f2faf5;
+      --red: #f25f5c;
+      --red-soft: #fff6f6;
+      --amber: #f6ad3c;
+      --slate: #93a4b5;
+      --shadow: 0 12px 28px rgba(32, 45, 66, 0.08);
+    }
+
+    * { box-sizing: border-box; }
+    html { background: var(--bg); }
     body {
       margin: 0;
       min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Noto Sans KR', system-ui, sans-serif;
+      letter-spacing: 0;
+    }
+
+    button, input, select { font: inherit; letter-spacing: 0; }
+    button { cursor: pointer; }
+    .hidden { display: none !important; }
+
+    .auth-screen {
+      min-height: 100vh;
       display: grid;
       place-items: center;
-      background: #f6f8fb;
-      color: #1e2532;
-      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      padding: 24px;
     }
-    main {
-      width: min(100% - 32px, 420px);
-      padding: 28px;
-      border: 1px solid #d8e0ea;
+
+    .auth-panel {
+      width: min(100%, 420px);
+      background: var(--panel);
+      border: 1px solid var(--line);
       border-radius: 18px;
+      box-shadow: var(--shadow);
+      padding: 26px;
+    }
+
+    .auth-title {
+      margin: 0;
+      font-size: 26px;
+      font-weight: 900;
+    }
+
+    .auth-subtitle {
+      margin: 8px 0 22px;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.55;
+    }
+
+    .google-button {
+      width: 100%;
+      min-height: 48px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
       background: #fff;
-      box-shadow: 0 12px 28px rgba(32, 45, 66, 0.08);
-      text-align: center;
-    }
-    h1 {
-      margin: 0 0 10px;
-      font-size: 22px;
-    }
-    p {
-      margin: 0 0 20px;
-      color: #728096;
-      line-height: 1.6;
-    }
-    a {
+      color: var(--text);
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      min-height: 44px;
-      padding: 0 18px;
-      border-radius: 999px;
-      background: #3478f6;
+      gap: 10px;
+      font-weight: 900;
+    }
+
+    .google-mark {
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      display: inline-grid;
+      place-items: center;
       color: #fff;
+      background: conic-gradient(from -45deg, #4285f4, #34a853, #fbbc05, #ea4335, #4285f4);
+      font-size: 13px;
+      font-weight: 900;
+    }
+
+    .auth-message {
+      min-height: 22px;
+      margin-top: 14px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.55;
+    }
+
+    .auth-message.error { color: var(--red); }
+
+    .app {
+      width: min(100%, 1180px);
+      margin: 0 auto;
+      padding: 18px 18px 40px;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 18px;
+    }
+
+    .brand { min-width: 0; }
+
+    .brand-title {
+      margin: 0;
+      font-size: 22px;
+      font-weight: 900;
+    }
+
+    .brand-meta {
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .account {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+    }
+
+    .avatar {
+      width: 34px;
+      height: 34px;
+      border-radius: 50%;
+      background: var(--blue-soft);
+      color: var(--blue);
+      display: grid;
+      place-items: center;
+      overflow: hidden;
+      font-size: 13px;
+      font-weight: 900;
+      flex: 0 0 auto;
+    }
+
+    .avatar img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    .account-name {
+      max-width: 170px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .text-button {
+      border: 1px solid var(--line);
+      background: var(--panel);
+      color: var(--muted);
+      border-radius: 999px;
+      padding: 8px 12px;
+      font-size: 12px;
       font-weight: 800;
       text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 36px;
+    }
+
+    .text-button:hover { color: var(--blue); border-color: #bed3ff; }
+
+    .selector-card,
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      box-shadow: var(--shadow);
+    }
+
+    .selector-card {
+      padding: 16px;
+      margin-bottom: 14px;
+    }
+
+    .selector-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      gap: 10px;
+    }
+
+    .field {
+      display: grid;
+      gap: 7px;
+      min-width: 0;
+    }
+
+    .field label {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .field select,
+    .field input {
+      width: 100%;
+      min-height: 44px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #fbfcfe;
+      color: var(--text);
+      outline: none;
+      padding: 0 12px;
+      font-size: 14px;
+    }
+
+    .field select:focus,
+    .field input:focus { border-color: #9dbbff; box-shadow: 0 0 0 4px rgba(52,120,246,0.1); }
+
+    .summary-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+
+    .metric {
+      min-height: 118px;
+      border-radius: 18px;
+      padding: 18px 10px;
+      text-align: center;
+      display: grid;
+      align-content: center;
+      gap: 7px;
+    }
+
+    .metric.best { background: var(--green-soft); }
+    .metric.worst { background: var(--red-soft); }
+    .metric.period { background: #f4f7ff; }
+
+    .metric-label {
+      color: var(--muted);
+      font-size: 16px;
+      font-weight: 600;
+    }
+
+    .metric-value {
+      line-height: 1;
+      font-size: clamp(28px, 7vw, 42px);
+      font-weight: 900;
+    }
+
+    .metric.best .metric-value { color: var(--green); }
+    .metric.worst .metric-value { color: var(--red); }
+    .metric.period .metric-value { color: var(--blue); }
+
+    .metric-sub {
+      color: var(--slate);
+      font-size: 14px;
+      font-family: 'Space Mono', monospace;
+    }
+
+    .card {
+      padding: 18px;
+      margin-bottom: 16px;
+    }
+
+    .card-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+
+    .card-title {
+      margin: 0;
+      font-size: 24px;
+      font-weight: 900;
+    }
+
+    .date-pill {
+      flex: 0 0 auto;
+      border-radius: 10px;
+      background: var(--blue-soft);
+      color: var(--blue);
+      padding: 8px 11px;
+      font-size: 13px;
+      font-weight: 800;
+    }
+
+    .segment {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 0;
+      background: var(--soft);
+      border-radius: 999px;
+      padding: 5px;
+      margin-bottom: 18px;
+    }
+
+    .segment button {
+      min-width: 0;
+      min-height: 40px;
+      border: 0;
+      border-radius: 999px;
+      background: transparent;
+      color: var(--muted);
+      font-size: 14px;
+      font-weight: 800;
+    }
+
+    .segment button.active {
+      background: var(--panel);
+      color: var(--text);
+      box-shadow: 0 4px 12px rgba(32, 45, 66, 0.12);
+    }
+
+    .chart-shell {
+      position: relative;
+      height: 360px;
+    }
+
+    .empty-state {
+      min-height: 180px;
+      display: grid;
+      place-items: center;
+      text-align: center;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.6;
+    }
+
+    .top-table {
+      width: 100%;
+      border-collapse: collapse;
+      table-layout: fixed;
+    }
+
+    .top-table th {
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 800;
+      text-align: left;
+      padding: 10px 8px 12px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .top-table th:first-child,
+    .top-table td:first-child { width: 86px; }
+
+    .top-table td {
+      padding: 12px 8px;
+      border-bottom: 1px solid var(--line-soft);
+      color: #465264;
+      font-size: 15px;
+      vertical-align: middle;
+    }
+
+    .top-table tr.target td {
+      background: #f7fbff;
+      color: var(--blue);
+      font-weight: 900;
+    }
+
+    .rank-chip {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 48px;
+      height: 34px;
+      border-radius: 9px;
+      background: var(--slate);
+      color: #fff;
+      font-weight: 900;
+      font-size: 15px;
+    }
+
+    .rank-chip.rank-1 { background: var(--amber); }
+    .rank-chip.rank-2 { background: #97a8b7; }
+    .rank-chip.rank-3 { background: #b88661; }
+
+    .place-cell {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .current-list,
+    .item-list {
+      display: grid;
+      gap: 8px;
+    }
+
+    .current-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: center;
+      border: 1px solid var(--line-soft);
+      border-radius: 12px;
+      padding: 11px 12px;
+    }
+
+    .current-main { min-width: 0; }
+
+    .current-name {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-weight: 800;
+      font-size: 14px;
+    }
+
+    .current-sub {
+      margin-top: 3px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .current-rank {
+      color: var(--blue);
+      font-weight: 900;
+      font-size: 18px;
+    }
+
+    .manage-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .manage-panel {
+      border: 1px solid var(--line-soft);
+      border-radius: 14px;
+      padding: 14px;
+      min-width: 0;
+    }
+
+    .panel-title {
+      margin: 0 0 12px;
+      font-size: 15px;
+      font-weight: 900;
+    }
+
+    .form-row {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 9px;
+    }
+
+    .form-row input {
+      flex: 1;
+      min-width: 0;
+      height: 42px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #fbfcfe;
+      color: var(--text);
+      outline: none;
+      padding: 0 11px;
+      font-size: 13px;
+    }
+
+    .primary-button {
+      min-height: 42px;
+      border: 0;
+      border-radius: 10px;
+      background: var(--blue);
+      color: #fff;
+      font-weight: 900;
+      padding: 0 14px;
+      white-space: nowrap;
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .primary-button.full { width: 100%; }
+    .primary-button:disabled { opacity: 0.55; cursor: wait; }
+
+    .delete-button {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: #fff;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 800;
+      padding: 6px 10px;
+    }
+
+    .delete-button:hover { color: var(--red); border-color: #ffc5c5; }
+
+    .item-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      border-top: 1px solid var(--line-soft);
+      padding-top: 8px;
+    }
+
+    .item-text {
+      min-width: 0;
+      color: #465264;
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .item-text small {
+      display: block;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      color: var(--muted);
+      font-size: 11px;
+      font-family: 'Space Mono', monospace;
+    }
+
+    .toast {
+      position: fixed;
+      left: 18px;
+      right: 18px;
+      bottom: 18px;
+      max-width: 520px;
+      margin: 0 auto;
+      background: #152033;
+      color: #fff;
+      border-radius: 14px;
+      box-shadow: 0 16px 32px rgba(20, 32, 51, 0.22);
+      padding: 14px 16px;
+      text-align: center;
+      font-weight: 800;
+      transform: translateY(80px);
+      opacity: 0;
+      transition: 0.25s ease;
+      z-index: 20;
+    }
+
+    .toast.show {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    @media (min-width: 860px) {
+      .app { padding: 28px 24px 56px; }
+      .main-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1.4fr) minmax(320px, 0.8fr);
+        gap: 16px;
+        align-items: start;
+      }
+      .chart-shell { height: 420px; }
+    }
+
+    @media (max-width: 720px) {
+      .app { padding: 14px 12px 34px; }
+      .topbar { align-items: flex-start; }
+      .brand-title { font-size: 19px; }
+      .selector-grid { grid-template-columns: 1fr; }
+      .summary-grid { gap: 8px; }
+      .metric { min-height: 104px; padding: 14px 8px; border-radius: 16px; }
+      .metric-label { font-size: 13px; }
+      .metric-sub { font-size: 12px; }
+      .card { padding: 16px; border-radius: 16px; }
+      .card-title { font-size: 22px; }
+      .segment button { min-height: 36px; font-size: 13px; }
+      .chart-shell { height: 330px; }
+      .top-table td { font-size: 14px; }
+      .manage-grid { grid-template-columns: 1fr; }
+      .account-name { display: none; }
+    }
+
+    @media (max-width: 390px) {
+      .metric-value { font-size: 27px; }
+      .segment button { font-size: 12px; }
+      .top-table th:first-child,
+      .top-table td:first-child { width: 74px; }
+      .rank-chip { min-width: 42px; height: 31px; font-size: 14px; }
     }
   </style>
 </head>
 <body>
-  <main>
-    <h1>네이버 순위 기록기</h1>
-    <p>앱으로 이동하고 있습니다.</p>
-    <a href="https://naver-place-tracker-production.up.railway.app/">바로 열기</a>
+  <section id="authScreen" class="auth-screen">
+    <div class="auth-panel">
+      <h1 class="auth-title">네이버 순위 기록기</h1>
+      <p class="auth-subtitle">Google 계정으로 접속하면 플레이스와 키워드가 계정별로 분리됩니다.</p>
+      <button id="googleLoginBtn" class="google-button" type="button">
+        <span class="google-mark">G</span>
+        Google로 시작하기
+      </button>
+      <div id="authMessage" class="auth-message"></div>
+    </div>
+  </section>
+
+  <main id="appShell" class="app hidden">
+    <header class="topbar">
+      <div class="brand">
+        <h1 class="brand-title">플레이스 순위</h1>
+        <div id="lastChecked" class="brand-meta">마지막 확인 -</div>
+      </div>
+      <div class="account">
+        <div id="avatar" class="avatar">U</div>
+        <span id="accountName" class="account-name"></span>
+        <button id="logoutBtn" class="text-button" type="button">로그아웃</button>
+      </div>
+    </header>
+
+    <section class="selector-card">
+      <div class="selector-grid">
+        <div class="field">
+          <label for="placeSelect">플레이스</label>
+          <select id="placeSelect"></select>
+        </div>
+        <div class="field">
+          <label for="keywordSelect">키워드</label>
+          <select id="keywordSelect"></select>
+        </div>
+      </div>
+    </section>
+
+    <section class="summary-grid" aria-label="순위 요약">
+      <div class="metric best">
+        <div class="metric-label">최고 순위</div>
+        <div id="bestRank" class="metric-value">-</div>
+        <div id="bestDate" class="metric-sub">-</div>
+      </div>
+      <div class="metric worst">
+        <div class="metric-label">최저 순위</div>
+        <div id="worstRank" class="metric-value">-</div>
+        <div id="worstDate" class="metric-sub">-</div>
+      </div>
+      <div class="metric period">
+        <div class="metric-label">추적 기간</div>
+        <div id="trackingDays" class="metric-value">0일</div>
+        <div class="metric-sub">누적</div>
+      </div>
+    </section>
+
+    <div class="main-grid">
+      <section class="card">
+        <div class="card-head">
+          <h2 class="card-title">순위 변동 추이</h2>
+        </div>
+        <div class="segment" role="tablist" aria-label="기간 선택">
+          <button type="button" data-range="all">전체</button>
+          <button type="button" data-range="7" class="active">7일</button>
+          <button type="button" data-range="30">1개월</button>
+          <button type="button" data-range="90">3개월</button>
+          <button type="button" data-range="180">6개월</button>
+        </div>
+        <div id="chartEmpty" class="empty-state hidden">선택한 조건의 순위 기록이 없습니다.</div>
+        <div id="chartShell" class="chart-shell">
+          <canvas id="rankChart"></canvas>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="card-head">
+          <h2 id="topTitle" class="card-title">TOP 30</h2>
+          <span id="topDate" class="date-pill hidden"></span>
+        </div>
+        <div id="topEmpty" class="empty-state hidden">아직 TOP 30 데이터가 없습니다.</div>
+        <table id="topTable" class="top-table">
+          <thead>
+            <tr>
+              <th>순위</th>
+              <th>업체명</th>
+            </tr>
+          </thead>
+          <tbody id="topRows"></tbody>
+        </table>
+      </section>
+    </div>
+
+    <section class="card">
+      <div class="card-head">
+        <h2 class="card-title">현재 순위</h2>
+        <a class="primary-button" href="https://github.com/djmonnar/naver/actions/workflows/daily-rank-check.yml" target="_blank" rel="noreferrer">수동 실행</a>
+      </div>
+      <div id="currentEmpty" class="empty-state hidden">현재 순위 기록이 없습니다.</div>
+      <div id="currentRows" class="current-list"></div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2 class="card-title">관리</h2>
+      </div>
+      <div class="manage-grid">
+        <div class="manage-panel">
+          <h3 class="panel-title">플레이스</h3>
+          <form id="placeForm">
+            <div class="form-row">
+              <input id="placeNameInput" name="place_name" placeholder="상호명" required>
+            </div>
+            <div class="form-row">
+              <input id="placeIdInput" name="place_id" placeholder="플레이스 ID" required>
+              <button type="submit" class="primary-button">추가</button>
+            </div>
+          </form>
+          <div id="placeRows" class="item-list"></div>
+        </div>
+
+        <div class="manage-panel">
+          <h3 class="panel-title">키워드</h3>
+          <form id="keywordForm">
+            <div class="form-row">
+              <input id="keywordInput" name="keyword" placeholder="검색 키워드" required>
+              <button type="submit" class="primary-button">추가</button>
+            </div>
+          </form>
+          <div id="keywordRows" class="item-list"></div>
+        </div>
+
+        <div class="manage-panel">
+          <h3 class="panel-title">체크 상태</h3>
+          <a class="primary-button full" href="https://github.com/djmonnar/naver/actions" target="_blank" rel="noreferrer">Actions 열기</a>
+        </div>
+      </div>
+    </section>
   </main>
+
+  <div id="toast" class="toast"></div>
+
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/12.15.0/firebase-app.js";
+    import {
+      GoogleAuthProvider,
+      browserLocalPersistence,
+      getAuth,
+      getRedirectResult,
+      onAuthStateChanged,
+      setPersistence,
+      signInWithPopup,
+      signInWithRedirect,
+      signOut
+    } from "https://www.gstatic.com/firebasejs/12.15.0/firebase-auth.js";
+    import {
+      collection,
+      deleteDoc,
+      doc,
+      getFirestore,
+      onSnapshot,
+      setDoc
+    } from "https://www.gstatic.com/firebasejs/12.15.0/firebase-firestore.js";
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyBVhPBm2AMFJXU_fiNQsHDozABcp0XxJw8",
+      authDomain: "naver-637b4.firebaseapp.com",
+      projectId: "naver-637b4",
+      storageBucket: "naver-637b4.firebasestorage.app",
+      messagingSenderId: "111852664498",
+      appId: "1:111852664498:web:0b3329708e9fc1961f3bab"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+    const db = getFirestore(app);
+    const provider = new GoogleAuthProvider();
+    provider.setCustomParameters({ prompt: "select_account" });
+    auth.languageCode = "ko";
+    await setPersistence(auth, browserLocalPersistence);
+
+    const state = {
+      user: null,
+      places: [],
+      keywords: [],
+      rankings: [],
+      keywordResults: [],
+      selectedPlaceId: "",
+      selectedKeyword: "",
+      activeRange: "7",
+      unsubscribers: []
+    };
+
+    const $ = (id) => document.getElementById(id);
+    let rankChart = null;
+
+    $("googleLoginBtn").addEventListener("click", signInWithGoogle);
+    $("logoutBtn").addEventListener("click", () => signOut(auth));
+    $("placeSelect").addEventListener("change", (event) => {
+      state.selectedPlaceId = event.target.value;
+      saveSelection();
+      render();
+    });
+    $("keywordSelect").addEventListener("change", (event) => {
+      state.selectedKeyword = event.target.value;
+      saveSelection();
+      render();
+    });
+    $("placeForm").addEventListener("submit", addPlace);
+    $("keywordForm").addEventListener("submit", addKeyword);
+    document.querySelectorAll(".segment button").forEach((button) => {
+      button.addEventListener("click", () => {
+        document.querySelectorAll(".segment button").forEach((item) => item.classList.remove("active"));
+        button.classList.add("active");
+        state.activeRange = button.dataset.range;
+        renderChart(getChartPoints(), state.activeRange);
+      });
+    });
+
+    getRedirectResult(auth).catch(showAuthError);
+    onAuthStateChanged(auth, async (user) => {
+      clearSubscriptions();
+      state.user = user;
+      if (!user) {
+        $("authScreen").classList.remove("hidden");
+        $("appShell").classList.add("hidden");
+        return;
+      }
+
+      $("authScreen").classList.add("hidden");
+      $("appShell").classList.remove("hidden");
+      loadSelection();
+      renderAccount();
+      await ensureUserDoc(user);
+      subscribeUserData(user.uid);
+    });
+
+    async function signInWithGoogle() {
+      $("authMessage").textContent = "Google 계정으로 연결 중입니다.";
+      $("authMessage").className = "auth-message";
+      $("googleLoginBtn").disabled = true;
+
+      try {
+        await signInWithPopup(auth, provider);
+      } catch (error) {
+        if (["auth/popup-blocked", "auth/popup-closed-by-user", "auth/cancelled-popup-request"].includes(error.code)) {
+          await signInWithRedirect(auth, provider);
+          return;
+        }
+        showAuthError(error);
+      } finally {
+        $("googleLoginBtn").disabled = false;
+      }
+    }
+
+    function showAuthError(error) {
+      const code = error?.code || "";
+      let message = "로그인 중 오류가 발생했습니다.";
+      if (code === "auth/unauthorized-domain") {
+        message = "Firebase Authentication 승인 도메인에 djmonnar.github.io를 추가해주세요.";
+      } else if (code === "auth/operation-not-allowed") {
+        message = "Firebase 콘솔에서 Google 로그인을 활성화해주세요.";
+      }
+      $("authMessage").textContent = message;
+      $("authMessage").className = "auth-message error";
+    }
+
+    async function ensureUserDoc(user) {
+      await setDoc(doc(db, "users", user.uid), {
+        email: user.email || "",
+        name: user.displayName || "",
+        photo_url: user.photoURL || "",
+        updated_at: nowText()
+      }, { merge: true });
+    }
+
+    function subscribeUserData(uid) {
+      const base = ["users", uid];
+      listenCollection([...base, "places"], (rows) => {
+        state.places = rows.sort((a, b) => (b.created_at || "").localeCompare(a.created_at || ""));
+        render();
+      });
+      listenCollection([...base, "keywords"], (rows) => {
+        state.keywords = rows.sort((a, b) => (b.created_at || "").localeCompare(a.created_at || ""));
+        render();
+      });
+      listenCollection([...base, "rankings"], (rows) => {
+        state.rankings = rows;
+        render();
+      });
+      listenCollection([...base, "keyword_results"], (rows) => {
+        state.keywordResults = rows;
+        render();
+      });
+    }
+
+    function listenCollection(pathParts, callback) {
+      const unsubscribe = onSnapshot(
+        collection(db, ...pathParts),
+        (snapshot) => callback(snapshot.docs.map((item) => ({ id: item.id, ...item.data() }))),
+        (error) => showToast(firebaseMessage(error))
+      );
+      state.unsubscribers.push(unsubscribe);
+    }
+
+    function clearSubscriptions() {
+      state.unsubscribers.forEach((unsubscribe) => unsubscribe());
+      state.unsubscribers = [];
+      state.places = [];
+      state.keywords = [];
+      state.rankings = [];
+      state.keywordResults = [];
+    }
+
+    async function addPlace(event) {
+      event.preventDefault();
+      if (!state.user) return;
+      const placeId = $("placeIdInput").value.trim();
+      const placeName = $("placeNameInput").value.trim();
+      if (!placeId || !placeName) return;
+
+      await setDoc(doc(db, "users", state.user.uid, "places", placeId), {
+        place_id: placeId,
+        place_name: placeName,
+        created_at: nowText()
+      }, { merge: true });
+      event.target.reset();
+      showToast("플레이스를 추가했습니다.");
+    }
+
+    async function addKeyword(event) {
+      event.preventDefault();
+      if (!state.user) return;
+      const keyword = $("keywordInput").value.trim();
+      if (!keyword) return;
+
+      await setDoc(doc(db, "users", state.user.uid, "keywords", keywordDocId(keyword)), {
+        keyword,
+        created_at: nowText()
+      }, { merge: true });
+      event.target.reset();
+      showToast("키워드를 추가했습니다.");
+    }
+
+    async function deletePlace(placeId) {
+      if (!state.user) return;
+      await deleteDoc(doc(db, "users", state.user.uid, "places", placeId));
+      showToast("플레이스를 삭제했습니다.");
+    }
+
+    async function deleteKeyword(keyword) {
+      if (!state.user) return;
+      await deleteDoc(doc(db, "users", state.user.uid, "keywords", keywordDocId(keyword)));
+      showToast("키워드를 삭제했습니다.");
+    }
+
+    function render() {
+      if (!state.user) return;
+      syncSelection();
+      renderSelectors();
+      renderSummary();
+      renderChart(getChartPoints(), state.activeRange);
+      renderTopResults();
+      renderCurrentRankings();
+      renderManageLists();
+      renderLastChecked();
+    }
+
+    function renderAccount() {
+      const user = state.user;
+      $("accountName").textContent = user.displayName || user.email || user.uid;
+      if (user.photoURL) {
+        $("avatar").innerHTML = `<img src="${escapeHtml(user.photoURL)}" alt="">`;
+      } else {
+        $("avatar").textContent = (user.displayName || user.email || "U").slice(0, 1).toUpperCase();
+      }
+    }
+
+    function renderSelectors() {
+      $("placeSelect").innerHTML = state.places.length
+        ? state.places.map((place) => {
+          const selected = place.place_id === state.selectedPlaceId ? "selected" : "";
+          return `<option value="${escapeHtml(place.place_id)}" ${selected}>${escapeHtml(place.place_name || place.place_id)}</option>`;
+        }).join("")
+        : `<option value="">등록된 플레이스 없음</option>`;
+      $("placeSelect").disabled = !state.places.length;
+
+      $("keywordSelect").innerHTML = state.keywords.length
+        ? state.keywords.map((item) => {
+          const selected = item.keyword === state.selectedKeyword ? "selected" : "";
+          return `<option value="${escapeHtml(item.keyword)}" ${selected}>${escapeHtml(item.keyword)}</option>`;
+        }).join("")
+        : `<option value="">등록된 키워드 없음</option>`;
+      $("keywordSelect").disabled = !state.keywords.length;
+    }
+
+    function renderSummary() {
+      const rows = selectedRankRows().filter((row) => Number(row.rank) > 0);
+      if (!rows.length) {
+        $("bestRank").textContent = "-";
+        $("bestDate").textContent = "-";
+        $("worstRank").textContent = "-";
+        $("worstDate").textContent = "-";
+        $("trackingDays").textContent = "0일";
+        return;
+      }
+
+      const best = rows.reduce((winner, row) => Number(row.rank) < Number(winner.rank) ? row : winner, rows[0]);
+      const worst = rows.reduce((winner, row) => Number(row.rank) > Number(winner.rank) ? row : winner, rows[0]);
+      const dates = [...new Set(rows.map((row) => row.date).filter(Boolean))].sort();
+      const first = parseDate(dates[0]);
+      const last = parseDate(dates[dates.length - 1]);
+      const days = first && last ? Math.max(1, Math.round((last - first) / 86400000) + 1) : dates.length;
+
+      $("bestRank").textContent = `${best.rank}위`;
+      $("bestDate").textContent = mmdd(best.date);
+      $("worstRank").textContent = `${worst.rank}위`;
+      $("worstDate").textContent = mmdd(worst.date);
+      $("trackingDays").textContent = `${days}일`;
+    }
+
+    function renderChart(points, range) {
+      const visiblePoints = filteredPoints(points, range);
+      const validRanks = visiblePoints.map((point) => point.rank).filter((rank) => rank !== null);
+      const hasData = validRanks.length > 0;
+      $("chartEmpty").classList.toggle("hidden", hasData);
+      $("chartShell").classList.toggle("hidden", !hasData);
+
+      if (!hasData) {
+        if (rankChart) rankChart.destroy();
+        rankChart = null;
+        return;
+      }
+
+      const maxRank = Math.max(...validRanks, 5) + 1;
+      const canvas = $("rankChart");
+      if (rankChart) rankChart.destroy();
+      rankChart = new Chart(canvas.getContext("2d"), {
+        type: "line",
+        data: {
+          labels: visiblePoints.map((point) => mmdd(point.date)),
+          datasets: [{
+            data: visiblePoints.map((point) => point.rank),
+            borderColor: "#3478f6",
+            backgroundColor: "rgba(52, 120, 246, 0.08)",
+            borderWidth: 4,
+            pointRadius: 5,
+            pointHoverRadius: 7,
+            pointBackgroundColor: "#3478f6",
+            pointBorderWidth: 0,
+            tension: 0.42,
+            fill: true,
+            spanGaps: true
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              displayColors: false,
+              backgroundColor: "#ffffff",
+              borderColor: "#d8e0ea",
+              borderWidth: 1,
+              titleColor: "#728096",
+              bodyColor: "#3478f6",
+              titleFont: { family: "Noto Sans KR", size: 14, weight: 600 },
+              bodyFont: { family: "Noto Sans KR", size: 20, weight: 900 },
+              callbacks: {
+                title: (items) => visiblePoints[items[0].dataIndex]?.date || "",
+                label: (item) => item.parsed.y ? `${item.parsed.y}위` : "100위 밖"
+              }
+            }
+          },
+          scales: {
+            x: {
+              grid: { color: "#e8edf4" },
+              ticks: { color: "#a8b2c2", font: { family: "Space Mono", size: 13 }, maxRotation: 0 },
+              border: { color: "#d8e0ea" }
+            },
+            y: {
+              reverse: true,
+              min: 1,
+              max: maxRank,
+              grid: { color: "#e8edf4" },
+              ticks: {
+                color: "#a8b2c2",
+                precision: 0,
+                font: { family: "Noto Sans KR", size: 13, weight: 700 },
+                callback: (value) => Number.isInteger(value) ? `${value}위` : ""
+              },
+              border: { color: "#d8e0ea" }
+            }
+          }
+        }
+      });
+    }
+
+    function renderTopResults() {
+      $("topTitle").textContent = `"${state.selectedKeyword || "키워드"}" TOP 30`;
+      const rows = state.keywordResults.filter((row) => row.keyword === state.selectedKeyword);
+      const latestDate = rows.reduce((latest, row) => row.date && row.date > latest ? row.date : latest, "");
+      const latestRows = rows
+        .filter((row) => row.date === latestDate)
+        .sort((a, b) => Number(a.rank || 999) - Number(b.rank || 999))
+        .slice(0, 30);
+
+      $("topDate").classList.toggle("hidden", !latestDate);
+      $("topDate").textContent = latestDate ? `${mmdd(latestDate)} 기준` : "";
+      $("topEmpty").classList.toggle("hidden", latestRows.length > 0);
+      $("topTable").classList.toggle("hidden", latestRows.length === 0);
+      $("topRows").innerHTML = latestRows.map((row) => {
+        const rank = Number(row.rank || 0);
+        const rankClass = rank <= 3 ? `rank-${rank}` : "rank-other";
+        const target = row.place_id === state.selectedPlaceId ? "target" : "";
+        return `
+          <tr class="${target}">
+            <td><span class="rank-chip ${rankClass}">${rank}위</span></td>
+            <td class="place-cell">${escapeHtml(row.place_name || row.place_id || "-")}</td>
+          </tr>
+        `;
+      }).join("");
+    }
+
+    function renderCurrentRankings() {
+      const latest = latestRankings();
+      $("currentEmpty").classList.toggle("hidden", latest.length > 0);
+      $("currentRows").classList.toggle("hidden", latest.length === 0);
+      $("currentRows").innerHTML = latest.map((row) => {
+        const place = state.places.find((item) => item.place_id === row.place_id);
+        return `
+          <div class="current-row">
+            <div class="current-main">
+              <div class="current-name">${escapeHtml(place?.place_name || row.place_id || "-")}</div>
+              <div class="current-sub">${escapeHtml(row.keyword || "-")} · ${escapeHtml(row.date || "-")}</div>
+            </div>
+            <div class="current-rank">${formatRank(row.rank)}</div>
+          </div>
+        `;
+      }).join("");
+    }
+
+    function renderManageLists() {
+      $("placeRows").innerHTML = state.places.map((place) => `
+        <div class="item-row">
+          <div class="item-text">${escapeHtml(place.place_name || place.place_id)}<small>${escapeHtml(place.place_id)}</small></div>
+          <button type="button" class="delete-button" data-place-id="${escapeHtml(place.place_id)}">삭제</button>
+        </div>
+      `).join("");
+      $("keywordRows").innerHTML = state.keywords.map((item) => `
+        <div class="item-row">
+          <div class="item-text">${escapeHtml(item.keyword)}</div>
+          <button type="button" class="delete-button" data-keyword="${escapeHtml(item.keyword)}">삭제</button>
+        </div>
+      `).join("");
+
+      document.querySelectorAll("[data-place-id]").forEach((button) => {
+        button.addEventListener("click", () => deletePlace(button.dataset.placeId));
+      });
+      document.querySelectorAll("[data-keyword]").forEach((button) => {
+        button.addEventListener("click", () => deleteKeyword(button.dataset.keyword));
+      });
+    }
+
+    function renderLastChecked() {
+      const latestDate = state.rankings.reduce((latest, row) => row.date && row.date > latest ? row.date : latest, "");
+      $("lastChecked").textContent = latestDate ? `마지막 확인 ${latestDate}` : "마지막 확인 -";
+    }
+
+    function syncSelection() {
+      if (!state.places.some((place) => place.place_id === state.selectedPlaceId)) {
+        state.selectedPlaceId = state.places[0]?.place_id || "";
+      }
+      if (!state.keywords.some((item) => item.keyword === state.selectedKeyword)) {
+        state.selectedKeyword = state.keywords[0]?.keyword || "";
+      }
+      saveSelection();
+    }
+
+    function selectedRankRows() {
+      return state.rankings
+        .filter((row) => row.place_id === state.selectedPlaceId && row.keyword === state.selectedKeyword)
+        .sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+    }
+
+    function getChartPoints() {
+      const seen = new Set();
+      return selectedRankRows()
+        .filter((row) => {
+          if (!row.date || seen.has(row.date)) return false;
+          seen.add(row.date);
+          return true;
+        })
+        .map((row) => ({
+          date: row.date,
+          rank: Number(row.rank) > 0 ? Number(row.rank) : null
+        }));
+    }
+
+    function filteredPoints(points, range) {
+      const valid = points.filter((point) => point.rank !== null);
+      if (range === "all" || !valid.length) return points;
+      const latest = valid.reduce((max, point) => parseDate(point.date) > max ? parseDate(point.date) : max, parseDate(valid[0].date));
+      const cutoff = new Date(latest);
+      cutoff.setDate(cutoff.getDate() - Number(range) + 1);
+      return points.filter((point) => parseDate(point.date) >= cutoff);
+    }
+
+    function latestRankings() {
+      const byKey = new Map();
+      const placeIds = new Set(state.places.map((place) => place.place_id));
+      const keywordNames = new Set(state.keywords.map((item) => item.keyword));
+      state.rankings.forEach((row) => {
+        if (!placeIds.has(row.place_id) || !keywordNames.has(row.keyword)) return;
+        const key = `${row.place_id || ""}|${row.keyword || ""}`;
+        const current = byKey.get(key);
+        const stamp = `${row.date || ""} ${row.checked_at || ""}`;
+        const currentStamp = `${current?.date || ""} ${current?.checked_at || ""}`;
+        if (!current || stamp > currentStamp) byKey.set(key, row);
+      });
+      return [...byKey.values()].sort((a, b) => {
+        const keywordSort = (a.keyword || "").localeCompare(b.keyword || "");
+        if (keywordSort) return keywordSort;
+        return (Number(a.rank) || 999) - (Number(b.rank) || 999);
+      });
+    }
+
+    function keywordDocId(keyword) {
+      const bytes = new TextEncoder().encode(keyword);
+      let binary = "";
+      bytes.forEach((byte) => binary += String.fromCharCode(byte));
+      return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    }
+
+    function saveSelection() {
+      if (!state.user) return;
+      localStorage.setItem(`naver:selectedPlace:${state.user.uid}`, state.selectedPlaceId);
+      localStorage.setItem(`naver:selectedKeyword:${state.user.uid}`, state.selectedKeyword);
+    }
+
+    function loadSelection() {
+      if (!state.user) return;
+      state.selectedPlaceId = localStorage.getItem(`naver:selectedPlace:${state.user.uid}`) || "";
+      state.selectedKeyword = localStorage.getItem(`naver:selectedKeyword:${state.user.uid}`) || "";
+    }
+
+    function nowText() {
+      const date = new Date();
+      const pad = (value) => String(value).padStart(2, "0");
+      return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+    }
+
+    function parseDate(value) {
+      if (!value) return null;
+      const [year, month, day] = value.split("-").map(Number);
+      return new Date(year, month - 1, day);
+    }
+
+    function mmdd(value) {
+      return value ? value.slice(5).replace("-", "/") : "-";
+    }
+
+    function formatRank(rank) {
+      const numeric = Number(rank);
+      return numeric > 0 ? `${numeric}위` : "100위 밖";
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+    }
+
+    function firebaseMessage(error) {
+      if (error?.code === "permission-denied") {
+        return "Firestore 권한을 확인해주세요.";
+      }
+      return "데이터를 불러오지 못했습니다.";
+    }
+
+    function showToast(message) {
+      const toast = $("toast");
+      toast.textContent = message;
+      toast.classList.add("show");
+      setTimeout(() => toast.classList.remove("show"), 3500);
+    }
+  </script>
 </body>
 </html>
