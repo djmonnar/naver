@@ -1060,6 +1060,8 @@
     const CHECK_API_BASE_URL = "https://naver-0zwy.onrender.com";
     const CHECK_STALE_MS = 2 * 60 * 60 * 1000;
     const ADMIN_EMAIL = "djmonnar4@gmail.com";
+    const MAX_PLACES = 3;              // 개인당 등록 가능한 플레이스 수
+    const MAX_KEYWORDS_PER_PLACE = 4;  // 플레이스당 등록 가능한 키워드 수
 
     const app = initializeApp(firebaseConfig);
     const auth = getAuth(app);
@@ -1467,6 +1469,12 @@
       const placeName = $("placeNameInput").value.trim();
       if (!placeId || !placeName) return;
 
+      const isNewPlace = !state.places.some((place) => place.place_id === placeId);
+      if (isNewPlace && state.places.length >= MAX_PLACES) {
+        showToast(`플레이스는 최대 ${MAX_PLACES}개까지 등록할 수 있습니다.`);
+        return;
+      }
+
       try {
         await savePlaceDoc(placeId, placeName);
         event.target.reset();
@@ -1539,6 +1547,13 @@
       if (!keyword) return;
       if (!state.selectedPlaceId) {
         showToast("키워드를 연결할 플레이스를 먼저 선택해주세요.");
+        return;
+      }
+
+      const placeKeywords = keywordsForPlace(state.selectedPlaceId);
+      const isNewKeyword = !placeKeywords.some((row) => row.keyword === keyword);
+      if (isNewKeyword && placeKeywords.length >= MAX_KEYWORDS_PER_PLACE) {
+        showToast(`플레이스당 키워드는 최대 ${MAX_KEYWORDS_PER_PLACE}개까지 등록할 수 있습니다.`);
         return;
       }
 

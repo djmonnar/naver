@@ -18,11 +18,17 @@ from firebase_config import get_admin_app, get_data_backend, get_web_config, use
 app = FastAPI(title="네이버 플레이스 순위 트래커")
 templates = Jinja2Templates(directory="templates")
 scheduler = AsyncIOScheduler(timezone="Asia/Seoul")
-APP_VERSION = "cors-restore-20260708"
+APP_VERSION = "check-1330-limits-20260708"
 ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "djmonnar4@gmail.com").strip().lower()
 MANUAL_CHECK_LIMIT_PER_DAY = int(os.environ.get("MANUAL_CHECK_LIMIT_PER_DAY", "3"))
 # 이 일수 이상 로그인하지 않은 사용자는 매일 자동 체크에서 제외 (수동 체크는 가능)
 AUTO_CHECK_INACTIVE_DAYS = int(os.environ.get("AUTO_CHECK_INACTIVE_DAYS", "10"))
+# 매일 자동 순위 체크 시각 (KST). 기본 오후 1:30 — 정오~오후 1시 순위 변동 직후.
+DAILY_CHECK_HOUR = int(os.environ.get("DAILY_CHECK_HOUR", "13"))
+DAILY_CHECK_MINUTE = int(os.environ.get("DAILY_CHECK_MINUTE", "30"))
+# 개인당 등록 한도 (프런트엔드 index.html에도 동일 상수 존재)
+MAX_PLACES_PER_USER = int(os.environ.get("MAX_PLACES_PER_USER", "3"))
+MAX_KEYWORDS_PER_PLACE = int(os.environ.get("MAX_KEYWORDS_PER_PLACE", "4"))
 RUNNING_RANK_CHECKS: set[str] = set()
 QUEUED_RANK_CHECK_USERS: set[str] = set()
 RANK_CHECK_QUEUE: asyncio.Queue | None = None
@@ -88,6 +94,7 @@ async def server_status():
         "queued_rank_checks": len(QUEUED_RANK_CHECK_USERS),
         "manual_check_limit_per_day": MANUAL_CHECK_LIMIT_PER_DAY,
         "auto_check_inactive_days": AUTO_CHECK_INACTIVE_DAYS,
+        "daily_check_time_kst": f"{DAILY_CHECK_HOUR:02d}:{DAILY_CHECK_MINUTE:02d}",
         "data_backend": get_data_backend(),
         "uses_firestore": uses_firestore(),
         "auth_enabled": auth.auth_enabled(),
@@ -318,7 +325,14 @@ async def startup():
     if stale:
         print(f"재시작으로 중단된 체크 상태 {stale}건 리셋")
     _ensure_rank_check_worker()
-    scheduler.add_job(_enqueue_daily_rank_checks, CronTrigger(hour=9, minute=0, timezone="Asia/Seoul"), id="daily_check", replace_existing=True)
+    # 네이버 순위는 정오~오후 1시 사이 크게 변동하므로, 그 직후인 오후 1:30(KST)에
+    # 체크해 그날의 안정된 순위를 기록한다.
+    scheduler.add_job(
+        _enqueue_daily_rank_checks,
+        CronTrigger(hour=DAILY_CHECK_HOUR, minute=DAILY_CHECK_MINUTE, timezone="Asia/Seoul"),
+        id="daily_check",
+        replace_existing=True,
+    )
     scheduler.add_job(keep_alive, "interval", minutes=14, id="keep_alive", replace_existing=True)
     scheduler.start()
     print("스케줄러 시작")
@@ -561,8 +575,14 @@ async def dashboard(
 
 @app.post("/places/add")
 async def add_place(request: Request, place_id: str = Form(...), place_name: str = Form(...)):
-    if place_id.strip():
-        await database.add_place(place_id.strip(), place_name.strip(), auth.get_request_user(request)["uid"])
+    place_id = place_id.strip()
+    if place_id:
+        user_id = auth.get_request_user(request)["uid"]
+        places = await database.get_places(user_id)
+        is_new = not any(str(p.get("place_id") or "") == place_id for p in places)
+        if is_new and len(places) >= MAX_PLACES_PER_USER:
+            raise HTTPException(status_code=400, detail=f"플레이스는 최대 {MAX_PLACES_PER_USER}개까지 등록할 수 있습니다.")
+        await database.add_place(place_id, place_name.strip(), user_id)
     return RedirectResponse("/", status_code=303)
 
 @app.post("/places/delete")
@@ -573,8 +593,22 @@ async def del_place(request: Request, place_id: str = Form(...)):
 @app.post("/keywords/add")
 async def add_keyword(request: Request, keyword: str = Form(...), place_id: str = Form("")):
     target_place_id = place_id.strip()
-    if keyword.strip() and target_place_id:
-        await database.add_keyword(keyword.strip(), auth.get_request_user(request)["uid"], target_place_id)
+    keyword = keyword.strip()
+    if keyword and target_place_id:
+        user_id = auth.get_request_user(request)["uid"]
+        places = await database.get_places(user_id)
+        keywords = await database.get_keywords(user_id)
+        place_keywords = [
+            row for row in keywords
+            if _keyword_place_id(row, places) == target_place_id
+        ]
+        is_new = not any(str(row.get("keyword") or "") == keyword for row in place_keywords)
+        if is_new and len(place_keywords) >= MAX_KEYWORDS_PER_PLACE:
+            raise HTTPException(
+                status_code=400,
+                detail=f"플레이스당 키워드는 최대 {MAX_KEYWORDS_PER_PLACE}개까지 등록할 수 있습니다.",
+            )
+        await database.add_keyword(keyword, user_id, target_place_id)
     suffix = f"?place_id={target_place_id}" if target_place_id else ""
     return RedirectResponse(f"/{suffix}", status_code=303)
 
