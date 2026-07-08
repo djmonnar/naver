@@ -793,6 +793,7 @@
       appId: "1:111852664498:web:0b3329708e9fc1961f3bab"
     };
     const CHECK_API_BASE_URL = "https://naver-0zwy.onrender.com";
+    const CHECK_STALE_MS = 2 * 60 * 1000;
 
     const app = initializeApp(firebaseConfig);
     const auth = getAuth(app);
@@ -848,6 +849,11 @@
         renderChart(getChartPoints(), state.activeRange);
       });
     });
+    setInterval(() => {
+      if (state.checkStatus?.state === "queued" || state.checkStatus?.state === "running") {
+        renderCheckStatus();
+      }
+    }, 15000);
 
     getRedirectResult(auth).catch(showAuthError);
     onAuthStateChanged(auth, async (user) => {
@@ -1060,7 +1066,7 @@
 
     async function runRenderCheck() {
       if (!state.user) return;
-      if (state.checkStatus?.state === "queued" || state.checkStatus?.state === "running") {
+      if (isCheckActive(state.checkStatus)) {
         showToast("이미 순위 체크가 진행 중입니다.");
         return;
       }
@@ -1098,7 +1104,8 @@
         }
         state.checkStatus = {
           state: payload.status === "running" ? "running" : "queued",
-          message: payload.message || "Render 서버에서 순위 체크를 시작했습니다."
+          message: payload.message || "Render 서버에서 순위 체크를 시작했습니다.",
+          updated_at: nowText()
         };
         renderCheckStatus();
         showToast(payload.message || "Render 서버에서 순위 체크를 시작했습니다.");
@@ -1335,6 +1342,10 @@
     function renderCheckStatus() {
       const status = state.checkStatus;
       updateCheckButtons();
+      if (isCheckStale(status)) {
+        $("checkStatusText").textContent = "이전 체크가 중단됨. 다시 실행 가능";
+        return;
+      }
       if (status?.state === "queued") {
         $("checkStatusText").textContent = "체크 요청됨";
         return;
@@ -1370,12 +1381,23 @@
     }
 
     function updateCheckButtons() {
-      const isChecking = state.checkStatus?.state === "queued" || state.checkStatus?.state === "running";
+      const isChecking = isCheckActive(state.checkStatus);
       const labels = isChecking ? ["체크 중", "체크 중"] : ["지금 체크", "Render 서버로 체크"];
       [$("checkBtn"), $("checkBtnSecondary")].forEach((button, index) => {
         button.disabled = isChecking;
         button.textContent = labels[index];
       });
+    }
+
+    function isCheckActive(status) {
+      return (status?.state === "queued" || status?.state === "running") && !isCheckStale(status);
+    }
+
+    function isCheckStale(status) {
+      if (status?.state !== "queued" && status?.state !== "running") return false;
+      const updatedAt = parseDateTime(status.updated_at);
+      if (!updatedAt) return false;
+      return Date.now() - updatedAt.getTime() > CHECK_STALE_MS;
     }
 
     function syncSelection() {
@@ -1483,6 +1505,15 @@
       if (!value) return null;
       const [year, month, day] = value.split("-").map(Number);
       return new Date(year, month - 1, day);
+    }
+
+    function parseDateTime(value) {
+      if (!value) return null;
+      const [datePart, timePart = "00:00:00"] = String(value).split(" ");
+      const [year, month, day] = datePart.split("-").map(Number);
+      const [hour = 0, minute = 0, second = 0] = timePart.split(":").map(Number);
+      const parsed = new Date(year, month - 1, day, hour, minute, second);
+      return Number.isNaN(parsed.getTime()) ? null : parsed;
     }
 
     function mmdd(value) {
