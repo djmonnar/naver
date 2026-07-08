@@ -668,7 +668,7 @@
 
     <section class="card">
       <div class="card-head">
-        <h2 class="card-title">"{{ selected_keyword or '키워드' }}" TOP 30</h2>
+        <h2 class="card-title">"{{ selected_keyword or '키워드' }}" TOP 100</h2>
         {% if top_results_date %}
         <span class="date-pill">{{ top_results_date[5:] | replace('-', '/') }} 기준</span>
         {% endif %}
@@ -691,7 +691,7 @@
         </tbody>
       </table>
       {% else %}
-      <div class="empty-state">아직 TOP 30 데이터가 없습니다.</div>
+      <div class="empty-state">아직 TOP 100 데이터가 없습니다.</div>
       {% endif %}
     </section>
   </div>

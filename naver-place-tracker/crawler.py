@@ -15,7 +15,9 @@ def _now_kst() -> datetime:
     return datetime.now(KST)
 
 MAX_RANK = 100
-TOP_LIST_LIMIT = 30
+# 일일 체크에서 수집·저장하는 TOP 목록 개수. 100위까지 실제 순위를 기록하려면
+# MAX_RANK와 같게 둔다. (예전에는 30이라 31~100위가 전부 "순위 밖"으로 기록됨)
+TOP_LIST_LIMIT = MAX_RANK
 PLACE_SEARCH_LIMIT = 8
 
 _PLACE_NAME_NOISE_PHRASES = [
@@ -731,7 +733,7 @@ async def run_daily_check(user_id: str | None = None):
         for keyword_index, keyword in enumerate(unique_keywords, start=1):
             await _set_check_progress(
                 owner_uid,
-                f"{keyword} TOP 30 수집 중 ({keyword_index}/{total_keywords})",
+                f"{keyword} TOP {TOP_LIST_LIMIT} 수집 중 ({keyword_index}/{total_keywords})",
                 {"current_keyword": keyword, "keyword_index": keyword_index, "keyword_total": total_keywords},
             )
 
@@ -776,7 +778,7 @@ async def run_daily_check(user_id: str | None = None):
                 if rank > 0:
                     rank_str = f"{rank}위"
                 else:
-                    rank_str = "TOP 30 밖"
+                    rank_str = f"{MAX_RANK}위 밖"
                 print(f"  결과: [{keyword}] {place_name} → {rank_str}")
 
             await _set_check_progress(

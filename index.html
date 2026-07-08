@@ -915,10 +915,10 @@
 
       <section class="card">
         <div class="card-head">
-          <h2 id="topTitle" class="card-title">TOP 30</h2>
+          <h2 id="topTitle" class="card-title">TOP 100</h2>
           <span id="topDate" class="date-pill hidden"></span>
         </div>
-        <div id="topEmpty" class="empty-state hidden">아직 TOP 30 데이터가 없습니다.</div>
+        <div id="topEmpty" class="empty-state hidden">아직 TOP 100 데이터가 없습니다.</div>
         <table id="topTable" class="top-table">
           <thead>
             <tr>
@@ -1720,13 +1720,13 @@
     }
 
     function renderTopResults() {
-      $("topTitle").textContent = `"${state.selectedKeyword || "키워드"}" TOP 30`;
+      $("topTitle").textContent = `"${state.selectedKeyword || "키워드"}" TOP 100`;
       const rows = state.keywordResults.filter((row) => row.keyword === state.selectedKeyword);
       const latestDate = rows.reduce((latest, row) => row.date && row.date > latest ? row.date : latest, "");
       const latestRows = rows
         .filter((row) => row.date === latestDate)
         .sort((a, b) => Number(a.rank || 999) - Number(b.rank || 999))
-        .slice(0, 30);
+        .slice(0, 100);
       const visibleRows = state.topExpanded ? latestRows : latestRows.slice(0, 10);
 
       $("topDate").classList.toggle("hidden", !latestDate);
@@ -2127,7 +2127,7 @@
       const numeric = Number(rank);
       if (numeric > 0) return `${numeric}위`;
       if (numeric === 0) return "상세 확인 중";
-      return "TOP30 밖";
+      return "100위 밖";
     }
 
     function normalizePlaceName(name) {
