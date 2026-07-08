@@ -1,6 +1,6 @@
 # 네이버 순위 기록기
 
-GitHub Pages에서 Firebase Auth/Firestore를 사용하는 정적 대시보드입니다.
+GitHub Pages에서 Firebase Auth/Firestore를 사용하고, Render 서버가 네이버 순위 크롤링을 실행하는 대시보드입니다.
 
 ## 접속
 
@@ -13,10 +13,12 @@ GitHub Pages에서 Firebase Auth/Firestore를 사용하는 정적 대시보드�
 3. Firestore Database를 생성합니다.
 4. `firestore.rules` 내용을 Firestore Rules에 배포합니다.
 
-## 자동 크롤링
+## Render 실행 서버
 
-GitHub Actions의 `Daily Naver rank check` 워크플로가 매일 오전 9시(KST)에 실행됩니다.
+Render는 크롤링만 실행하고 데이터는 Firestore에 저장합니다.
 
-크롤러가 Firestore에 저장하려면 GitHub repository secret에 아래 값을 추가해야 합니다.
+Render Environment에 아래 값을 추가해야 합니다.
 
 - `FIREBASE_SERVICE_ACCOUNT_JSON`: Firebase 서비스 계정 JSON 전체
+- `DATA_BACKEND`: `firestore`
+- `FIREBASE_AUTH_ENABLED`: `true`

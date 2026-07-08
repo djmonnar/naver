@@ -327,6 +327,26 @@ async def check_now(request: Request, background_tasks: BackgroundTasks):
     background_tasks.add_task(crawler.run_daily_check, auth.get_request_user(request)["uid"])
     return JSONResponse({"status": "started", "message": "순위 체크를 시작했습니다."})
 
+
+@app.post("/api/check/now")
+async def api_check_now(request: Request, background_tasks: BackgroundTasks):
+    user = await auth.authenticate_bearer_request(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Firebase 로그인이 필요합니다.")
+
+    await database.ensure_user(
+        user["uid"],
+        user.get("email"),
+        user.get("name"),
+        user.get("photo_url"),
+    )
+    background_tasks.add_task(crawler.run_daily_check, user["uid"])
+    return JSONResponse({
+        "status": "started",
+        "message": "Render 서버에서 순위 체크를 시작했습니다.",
+    })
+
+
 @app.get("/check/status")
 async def check_status(request: Request):
     latest = await database.get_latest_rankings(auth.get_request_user(request)["uid"])

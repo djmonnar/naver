@@ -115,7 +115,7 @@ Firebase 프로젝트를 만든 뒤 아래 설정을 추가하면 계정별 데�
 
 Firestore 규칙을 직접 설정할 때는 `firestore.rules.example`을 기준으로 사용자 `uid`별 접근만 허용하세요.
 
-GitHub Pages 정적 앱과 GitHub Actions 크롤러를 사용할 때는 저장소 Secret에 `FIREBASE_SERVICE_ACCOUNT_JSON`을 추가하세요. Actions의 `Daily Naver rank check` 워크플로가 매일 오전 9시(KST)에 Firestore로 순위를 저장합니다.
+GitHub Pages 정적 앱에서 `지금 체크`를 누르면 Render 서버의 `/api/check/now`가 Firebase ID 토큰을 검증한 뒤 해당 사용자의 Firestore에 순위를 저장합니다. Render 환경변수에도 `FIREBASE_SERVICE_ACCOUNT_JSON`을 추가해야 합니다.
 
 ### 2-5. 접속 확인
 - 상단에 `https://place-tracker-xxxx.onrender.com` 형태의 URL 생성

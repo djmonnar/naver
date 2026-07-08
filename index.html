@@ -704,7 +704,7 @@
     <section class="card">
       <div class="card-head">
         <h2 class="card-title">현재 순위</h2>
-        <a class="primary-button" href="https://github.com/djmonnar/naver/actions/workflows/daily-rank-check.yml" target="_blank" rel="noreferrer">GitHub에서 체크 실행</a>
+        <button id="checkBtn" class="primary-button" type="button">지금 체크</button>
       </div>
       <div id="currentEmpty" class="empty-state hidden">현재 순위 기록이 없습니다.</div>
       <div id="currentRows" class="current-list"></div>
@@ -743,7 +743,7 @@
         <div class="manage-panel">
           <h3 class="panel-title">자동 체크</h3>
           <p id="checkStatusText" class="status-line">플레이스와 키워드 저장 대기</p>
-          <a class="primary-button full" href="https://github.com/djmonnar/naver/actions/workflows/daily-rank-check.yml" target="_blank" rel="noreferrer">GitHub 실행 페이지</a>
+          <button id="checkBtnSecondary" class="primary-button full" type="button">Render 서버로 체크</button>
         </div>
       </div>
     </section>
@@ -781,6 +781,7 @@
       messagingSenderId: "111852664498",
       appId: "1:111852664498:web:0b3329708e9fc1961f3bab"
     };
+    const CHECK_API_BASE_URL = "https://naver-0zwy.onrender.com";
 
     const app = initializeApp(firebaseConfig);
     const auth = getAuth(app);
@@ -807,6 +808,8 @@
 
     $("googleLoginBtn").addEventListener("click", signInWithGoogle);
     $("logoutBtn").addEventListener("click", () => signOut(auth));
+    $("checkBtn").addEventListener("click", runRenderCheck);
+    $("checkBtnSecondary").addEventListener("click", runRenderCheck);
     $("placeSelect").addEventListener("change", (event) => {
       state.selectedPlaceId = event.target.value;
       saveSelection();
@@ -971,6 +974,42 @@
       if (!state.user) return;
       await deleteDoc(doc(db, "users", state.user.uid, "keywords", keywordDocId(keyword)));
       showToast("키워드를 삭제했습니다.");
+    }
+
+    async function runRenderCheck() {
+      if (!state.user) return;
+      if (!state.places.length || !state.keywords.length) {
+        showToast("플레이스와 키워드를 먼저 저장해주세요.");
+        return;
+      }
+
+      const buttons = [$("checkBtn"), $("checkBtnSecondary")];
+      buttons.forEach((button) => {
+        button.disabled = true;
+        button.textContent = "요청 중";
+      });
+
+      try {
+        const idToken = await state.user.getIdToken();
+        const response = await fetch(`${CHECK_API_BASE_URL}/api/check/now`, {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${idToken}`
+          }
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(payload.detail || "check_failed");
+        }
+        showToast(payload.message || "Render 서버에서 순위 체크를 시작했습니다.");
+      } catch (error) {
+        showToast(renderCheckMessage(error));
+      } finally {
+        buttons.forEach((button, index) => {
+          button.disabled = false;
+          button.textContent = index === 0 ? "지금 체크" : "Render 서버로 체크";
+        });
+      }
     }
 
     function render() {
@@ -1192,7 +1231,7 @@
       const hasPlaces = state.places.length > 0;
       const hasKeywords = state.keywords.length > 0;
       if (hasPlaces && hasKeywords) {
-        $("checkStatusText").textContent = "체크 실행 준비 완료";
+        $("checkStatusText").textContent = "Render 서버로 즉시 실행 가능";
       } else if (hasPlaces) {
         $("checkStatusText").textContent = "키워드 저장 대기";
       } else if (hasKeywords) {
@@ -1314,6 +1353,17 @@
         return "Firestore 규칙을 확인해주세요.";
       }
       return "데이터 저장 또는 불러오기에 실패했습니다.";
+    }
+
+    function renderCheckMessage(error) {
+      const text = String(error?.message || "");
+      if (text.includes("Failed to fetch")) {
+        return "Render 서버 연결을 확인해주세요.";
+      }
+      if (text.includes("Firebase 로그인이 필요합니다")) {
+        return "로그인을 다시 확인해주세요.";
+      }
+      return "순위 체크 요청에 실패했습니다.";
     }
 
     function showToast(message) {

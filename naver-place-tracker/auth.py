@@ -47,9 +47,41 @@ def _firebase_auth():
     return firebase_auth
 
 
+def _user_from_decoded(decoded: dict) -> dict[str, str]:
+    email = decoded.get("email") or ""
+    return {
+        "uid": decoded["uid"],
+        "email": email,
+        "name": decoded.get("name") or email or decoded["uid"],
+        "photo_url": decoded.get("picture") or "",
+    }
+
+
+async def authenticate_bearer_request(request: Request) -> dict[str, str] | None:
+    auth_header = request.headers.get("authorization", "")
+    scheme, _, token = auth_header.partition(" ")
+    if scheme.lower() != "bearer" or not token.strip():
+        return None
+
+    try:
+        decoded = await asyncio.to_thread(
+            _firebase_auth().verify_id_token,
+            token.strip(),
+            app=get_admin_app(),
+        )
+    except Exception:
+        return None
+
+    return _user_from_decoded(decoded)
+
+
 async def authenticate_request(request: Request) -> dict[str, str] | None:
     if not auth_enabled():
         return local_user()
+
+    bearer_user = await authenticate_bearer_request(request)
+    if bearer_user:
+        return bearer_user
 
     session_cookie = request.cookies.get(SESSION_COOKIE_NAME)
     if not session_cookie:
@@ -65,12 +97,7 @@ async def authenticate_request(request: Request) -> dict[str, str] | None:
     except Exception:
         return None
 
-    email = decoded.get("email") or ""
-    return {
-        "uid": decoded["uid"],
-        "email": email,
-        "name": decoded.get("name") or email or decoded["uid"],
-    }
+    return _user_from_decoded(decoded)
 
 
 def unauthenticated_response(request: Request):

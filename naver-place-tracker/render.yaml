@@ -6,6 +6,26 @@ services:
     envVars:
       - key: PORT
         value: 8000
+      - key: DATA_BACKEND
+        value: firestore
+      - key: FIREBASE_AUTH_ENABLED
+        value: true
+      - key: FIREBASE_API_KEY
+        value: AIzaSyBVhPBm2AMFJXU_fiNQsHDozABcp0XxJw8
+      - key: FIREBASE_AUTH_DOMAIN
+        value: naver-637b4.firebaseapp.com
+      - key: FIREBASE_PROJECT_ID
+        value: naver-637b4
+      - key: FIREBASE_STORAGE_BUCKET
+        value: naver-637b4.firebasestorage.app
+      - key: FIREBASE_MESSAGING_SENDER_ID
+        value: 111852664498
+      - key: FIREBASE_APP_ID
+        value: 1:111852664498:web:0b3329708e9fc1961f3bab
+      - key: FIREBASE_SERVICE_ACCOUNT_JSON
+        sync: false
+      - key: SESSION_COOKIE_SECURE
+        value: true
       - key: DB_PATH
         value: /app/data/tracker.db
     disk:
