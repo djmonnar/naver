@@ -937,6 +937,65 @@
       state.checkStatus = null;
     }
 
+    function upsertPlaceState(place) {
+      state.places = [
+        place,
+        ...state.places.filter((item) => item.place_id !== place.place_id)
+      ].sort((a, b) => (b.created_at || "").localeCompare(a.created_at || ""));
+      state.selectedPlaceId = place.place_id;
+    }
+
+    function upsertKeywordState(item) {
+      state.keywords = [
+        item,
+        ...state.keywords.filter((row) => row.keyword !== item.keyword)
+      ].sort((a, b) => (b.created_at || "").localeCompare(a.created_at || ""));
+      state.selectedKeyword = item.keyword;
+    }
+
+    async function savePlaceDoc(placeId, placeName) {
+      const place = {
+        place_id: placeId,
+        place_name: placeName,
+        created_at: nowText()
+      };
+      await setDoc(doc(db, "users", state.user.uid, "places", placeId), place, { merge: true });
+      upsertPlaceState(place);
+      return place;
+    }
+
+    async function saveKeywordDoc(keyword) {
+      const item = {
+        keyword,
+        created_at: nowText()
+      };
+      await setDoc(doc(db, "users", state.user.uid, "keywords", keywordDocId(keyword)), item, { merge: true });
+      upsertKeywordState(item);
+      return item;
+    }
+
+    async function savePendingInputs() {
+      const placeId = $("placeIdInput").value.trim();
+      const placeName = $("placeNameInput").value.trim();
+      const keyword = $("keywordInput").value.trim();
+      let saved = false;
+
+      if (placeId && placeName) {
+        await savePlaceDoc(placeId, placeName);
+        $("placeForm").reset();
+        saved = true;
+      }
+
+      if (keyword) {
+        await saveKeywordDoc(keyword);
+        $("keywordForm").reset();
+        saved = true;
+      }
+
+      if (saved) render();
+      return saved;
+    }
+
     async function addPlace(event) {
       event.preventDefault();
       if (!state.user) return;
@@ -945,12 +1004,9 @@
       if (!placeId || !placeName) return;
 
       try {
-        await setDoc(doc(db, "users", state.user.uid, "places", placeId), {
-          place_id: placeId,
-          place_name: placeName,
-          created_at: nowText()
-        }, { merge: true });
+        await savePlaceDoc(placeId, placeName);
         event.target.reset();
+        render();
         showToast("플레이스를 저장했습니다.");
       } catch (error) {
         showToast(firebaseMessage(error));
@@ -964,11 +1020,9 @@
       if (!keyword) return;
 
       try {
-        await setDoc(doc(db, "users", state.user.uid, "keywords", keywordDocId(keyword)), {
-          keyword,
-          created_at: nowText()
-        }, { merge: true });
+        await saveKeywordDoc(keyword);
         event.target.reset();
+        render();
         showToast("키워드를 저장했습니다.");
       } catch (error) {
         showToast(firebaseMessage(error));
@@ -989,8 +1043,17 @@
 
     async function runRenderCheck() {
       if (!state.user) return;
+
+      try {
+        const savedPending = await savePendingInputs();
+        if (savedPending) showToast("입력값을 저장하고 순위 체크를 시작합니다.");
+      } catch (error) {
+        showToast(firebaseMessage(error));
+        return;
+      }
+
       if (!state.places.length || !state.keywords.length) {
-        showToast("플레이스와 키워드를 먼저 저장해주세요.");
+        showToast("플레이스와 키워드를 먼저 추가해주세요.");
         return;
       }
 
