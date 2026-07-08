@@ -11,6 +11,18 @@ MAX_RANK = 100
 TOP_LIST_LIMIT = 30
 PLACE_SEARCH_LIMIT = 8
 
+_PLACE_NAME_NOISE_PHRASES = [
+    "네이버페이예약",
+    "네이버페이",
+    "네이버예약",
+    "방문자리뷰",
+    "블로그리뷰",
+    "예약",
+    "저장",
+    "공유",
+    "길찾기",
+]
+
 _PLACE_ID_PATTERNS = [
     re.compile(r"/p/search/[^?#]+/place/(\d+)"),
     re.compile(r"https?://pcmap\.place\.naver\.com/[^/?#]+/(\d+)"),
@@ -30,12 +42,41 @@ def _decode_json_text(value: str) -> str:
 def _clean_place_name(name: str) -> str:
     cleaned = re.sub(r"\s+", " ", name or "").strip()
     blocked = {"광고", "저장", "공유", "방문자리뷰", "블로그리뷰", "예약", "길찾기"}
+    if cleaned in blocked:
+        return ""
+    for phrase in _PLACE_NAME_NOISE_PHRASES:
+        index = cleaned.find(phrase)
+        if index == 0:
+            return ""
+        if index > 0:
+            cleaned = cleaned[:index].strip()
+            break
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" ·ㆍ-_/|,")
     return "" if cleaned in blocked else cleaned
 
 
 def _normalize_place_name(name: str) -> str:
     cleaned = _clean_place_name(name)
     return re.sub(r"[\s·ㆍ\-_(){}\[\].,'\"`]+", "", cleaned).lower()
+
+
+def _place_names_match(left: str, right: str) -> bool:
+    left_key = _normalize_place_name(left)
+    right_key = _normalize_place_name(right)
+    if not left_key or not right_key:
+        return False
+    if left_key == right_key:
+        return True
+    shorter, longer = sorted([left_key, right_key], key=len)
+    return len(shorter) >= 6 and longer.startswith(shorter)
+
+
+def _rank_from_place_name(results: list[dict], target_place_name: str) -> int | None:
+    for row in results:
+        if _place_names_match(row.get("place_name") or "", target_place_name):
+            rank = int(row.get("rank") or 0)
+            return rank if rank > 0 else None
+    return None
 
 
 def _extract_place_id_from_text(value: str) -> str:
@@ -577,7 +618,7 @@ async def search_place_rank(keyword: str, target_place_id: str, target_place_nam
                 real_rank = int(row.get("rank") or 0)
                 print(f"  {real_rank}위: {place_id or '-'} {place_name}")
                 if place_id == target_place_id or (
-                    target_name_key and _normalize_place_name(place_name) == target_name_key
+                    target_name_key and _place_names_match(place_name, target_place_name or "")
                 ):
                     rank = real_rank
                     print(f"  ✅ 발견! 실제 {rank}위")
@@ -705,6 +746,8 @@ async def run_daily_check(user_id: str | None = None):
                 rank = rank_by_place_id.get(place_id)
                 if rank is None:
                     rank = rank_by_name.get(_normalize_place_name(place_name))
+                if rank is None:
+                    rank = _rank_from_place_name(keyword_results, place_name)
                 if rank is None:
                     rank = -1
                 await database.save_ranking(place_id, keyword, rank, today, owner_uid)

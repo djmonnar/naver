@@ -1741,12 +1741,13 @@
         const rank = Number(row.rank || 0);
         const rankClass = rank <= 3 ? `rank-${rank}` : "rank-other";
         const target = row.place_id === state.selectedPlaceId || (
-          selectedPlaceName && normalizePlaceName(row.place_name || "") === selectedPlaceName
+          selectedPlaceName && placeNamesMatch(row.place_name || "", selectedPlace?.place_name || "")
         ) ? "target" : "";
+        const displayName = cleanPlaceName(row.place_name || row.place_id || "-");
         return `
           <tr class="${target}">
             <td><span class="rank-chip ${rankClass}">${rank}위</span></td>
-            <td class="place-cell">${escapeHtml(row.place_name || row.place_id || "-")}</td>
+            <td class="place-cell">${escapeHtml(displayName || row.place_id || "-")}</td>
           </tr>
         `;
       }).join("");
@@ -1963,9 +1964,31 @@
     }
 
     function selectedRankRows() {
-      return state.rankings
+      const rows = state.rankings
         .filter((row) => row.place_id === state.selectedPlaceId && row.keyword === state.selectedKeyword)
-        .sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+        .map((row) => ({ ...row }));
+      const topRank = latestTopRankForPair({
+        place_id: state.selectedPlaceId,
+        keyword: state.selectedKeyword
+      });
+      if (topRank) {
+        const topRow = {
+          place_id: state.selectedPlaceId,
+          keyword: state.selectedKeyword,
+          rank: topRank.rank,
+          date: topRank.date,
+          checked_at: topRank.checked_at
+        };
+        const existingIndex = rows.findIndex((row) => row.date === topRank.date);
+        if (existingIndex >= 0) {
+          if (Number(rows[existingIndex].rank || 0) <= 0) {
+            rows[existingIndex] = { ...rows[existingIndex], ...topRow };
+          }
+        } else {
+          rows.push(topRow);
+        }
+      }
+      return rows.sort((a, b) => (a.date || "").localeCompare(b.date || ""));
     }
 
     function getChartPoints() {
@@ -2013,7 +2036,19 @@
       const latestByKey = new Map(latestRankings().map((row) => [`${row.place_id || ""}|${row.keyword || ""}`, row]));
       return configuredKeywordPairs().map((pair) => {
         const key = `${pair.place_id || ""}|${pair.keyword || ""}`;
-        return latestByKey.get(key) || {
+        const saved = latestByKey.get(key);
+        const topRank = latestTopRankForPair(pair);
+        if (topRank && (!saved || Number(saved.rank || 0) <= 0 || (topRank.date || "") >= (saved.date || ""))) {
+          return {
+            ...(saved || {}),
+            place_id: pair.place_id,
+            keyword: pair.keyword,
+            rank: topRank.rank,
+            date: topRank.date,
+            checked_at: topRank.checked_at
+          };
+        }
+        return saved || {
           place_id: pair.place_id,
           keyword: pair.keyword,
           rank: null,
@@ -2021,6 +2056,23 @@
           pending: true
         };
       });
+    }
+
+    function latestTopRankForPair(pair) {
+      const place = state.places.find((item) => item.place_id === pair.place_id);
+      const rows = state.keywordResults.filter((row) => row.keyword === pair.keyword);
+      const latestDate = rows.reduce((latest, row) => row.date && row.date > latest ? row.date : latest, "");
+      if (!latestDate) return null;
+      const match = rows
+        .filter((row) => row.date === latestDate)
+        .sort((a, b) => Number(a.rank || 999) - Number(b.rank || 999))
+        .find((row) => row.place_id === pair.place_id || placeNamesMatch(row.place_name || "", place?.place_name || ""));
+      if (!match || Number(match.rank || 0) <= 0) return null;
+      return {
+        rank: Number(match.rank),
+        date: match.date || latestDate,
+        checked_at: match.checked_at || ""
+      };
     }
 
     function keywordDocId(keyword) {
@@ -2079,7 +2131,31 @@
     }
 
     function normalizePlaceName(name) {
-      return String(name || "").replace(/[\s·ㆍ\-_(){}\[\].,'"`]+/g, "").toLowerCase();
+      return cleanPlaceName(name).replace(/[\s·ㆍ\-_(){}\[\].,'"`]+/g, "").toLowerCase();
+    }
+
+    function cleanPlaceName(name) {
+      let value = String(name || "").replace(/\s+/g, " ").trim();
+      const phrases = ["네이버페이예약", "네이버페이", "네이버예약", "방문자리뷰", "블로그리뷰", "예약", "저장", "공유", "길찾기"];
+      for (const phrase of phrases) {
+        const index = value.indexOf(phrase);
+        if (index === 0) return "";
+        if (index > 0) {
+          value = value.slice(0, index).trim();
+          break;
+        }
+      }
+      return value.replace(/[\s·ㆍ\-_/|,]+$/g, "");
+    }
+
+    function placeNamesMatch(left, right) {
+      const leftKey = normalizePlaceName(left);
+      const rightKey = normalizePlaceName(right);
+      if (!leftKey || !rightKey) return false;
+      if (leftKey === rightKey) return true;
+      const shorter = leftKey.length <= rightKey.length ? leftKey : rightKey;
+      const longer = leftKey.length > rightKey.length ? leftKey : rightKey;
+      return shorter.length >= 6 && longer.startsWith(shorter);
     }
 
     function escapeHtml(value) {

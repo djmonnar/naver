@@ -17,7 +17,7 @@ from firebase_config import get_admin_app, get_data_backend, get_web_config, use
 app = FastAPI(title="네이버 플레이스 순위 트래커 + 연해주 예약")
 templates = Jinja2Templates(directory="templates")
 scheduler = AsyncIOScheduler(timezone="Asia/Seoul")
-APP_VERSION = "member-admin-mode-20260708"
+APP_VERSION = "clean-place-name-rank-match-20260708"
 ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "djmonnar4@gmail.com").strip().lower()
 RUNNING_RANK_CHECKS: set[str] = set()
 
