@@ -18,7 +18,7 @@ from firebase_config import get_admin_app, get_data_backend, get_web_config, use
 app = FastAPI(title="네이버 플레이스 순위 트래커")
 templates = Jinja2Templates(directory="templates")
 scheduler = AsyncIOScheduler(timezone="Asia/Seoul")
-APP_VERSION = "crawl-time-budget-20260708"
+APP_VERSION = "depth50-browser-reuse-20260709"
 ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "djmonnar4@gmail.com").strip().lower()
 MANUAL_CHECK_LIMIT_PER_DAY = int(os.environ.get("MANUAL_CHECK_LIMIT_PER_DAY", "3"))
 # 이 일수 이상 로그인하지 않은 사용자는 매일 자동 체크에서 제외 (수동 체크는 가능)
@@ -458,7 +458,7 @@ def _fallback_top_results(latest: list[dict], keyword: str | None, selected_plac
     rows.sort(key=lambda row: int(row.get("rank") or 999))
     latest_date = max((row.get("date") for row in rows if row.get("date")), default=None)
     results = []
-    for row in rows[:crawler.MAX_RANK]:
+    for row in rows[:crawler.TOP_LIST_LIMIT]:
         results.append({
             "rank": row.get("rank"),
             "place_id": row.get("place_id") or "",
@@ -550,7 +550,7 @@ async def dashboard(
 
     top_payload = {"date": None, "results": []}
     if selected_keyword:
-        top_payload = await database.get_latest_keyword_results(selected_keyword, user_id=user_id, limit=crawler.MAX_RANK)
+        top_payload = await database.get_latest_keyword_results(selected_keyword, user_id=user_id, limit=crawler.TOP_LIST_LIMIT)
         if not top_payload["results"]:
             top_payload = _fallback_top_results(latest, selected_keyword, selected_place_id)
         else:

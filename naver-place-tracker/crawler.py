@@ -37,9 +37,10 @@ def _now_kst() -> datetime:
     return datetime.now(KST)
 
 MAX_RANK = 100
-# 일일 체크에서 수집·저장하는 TOP 목록 개수. 100위까지 실제 순위를 기록하려면
-# MAX_RANK와 같게 둔다. (예전에는 30이라 31~100위가 전부 "순위 밖"으로 기록됨)
-TOP_LIST_LIMIT = MAX_RANK
+# 일일 체크에서 수집·저장·추적하는 깊이(위). 기본 50 — 무료/Starter 플랜에서
+# 밀도 높은 키워드가 끝까지 스크롤되지 않고 일찍 끝나 속도·안정성이 좋아진다.
+# 이보다 밖이면 "N위 밖"으로 기록. RANK_TRACK_LIMIT 환경변수로 조절.
+TOP_LIST_LIMIT = int(os.environ.get("RANK_TRACK_LIMIT", "50"))
 PLACE_SEARCH_LIMIT = 8
 
 _PLACE_NAME_NOISE_PHRASES = [
@@ -346,53 +347,57 @@ async def _collect_results_from_frame(frame, limit: int) -> list[dict]:
     return results
 
 
+_STEALTH_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+_STEALTH_INIT = """
+    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+    window.chrome = { runtime: {} };
+"""
+
+
+async def _new_stealth_context(browser):
+    context = await browser.new_context(
+        user_agent=_STEALTH_UA,
+        viewport={"width": 1280, "height": 900},
+        locale="ko-KR",
+    )
+    await context.add_init_script(_STEALTH_INIT)
+    return context
+
+
+async def _collect_keyword_in_context(context, keyword: str, limit: int) -> list[dict]:
+    """이미 열려있는 컨텍스트(브라우저)로 한 키워드의 TOP 목록을 수집한다.
+
+    페이지만 새로 열고 닫으므로, 여러 키워드가 브라우저를 재사용해 기동 오버헤드를 없앤다.
+    """
+    page = await context.new_page()
+    try:
+        encoded_keyword = urllib.parse.quote(keyword)
+        search_url = f"https://map.naver.com/p/search/{encoded_keyword}"
+        print(f"  TOP 목록 접속 URL: {search_url}")
+        await page.goto(search_url, wait_until="domcontentloaded", timeout=40000)
+        await asyncio.sleep(random.uniform(3, 5))
+
+        frame = await _get_search_frame(page)
+        results = await _collect_results_from_frame(frame, limit)
+        print(f"  TOP 목록 {len(results)}개 수집")
+        return results
+    except Exception as e:
+        print(f"  TOP 목록 수집 오류 [{keyword}]: {e}")
+        return []
+    finally:
+        try:
+            await page.close()
+        except Exception:
+            pass
+
+
 async def search_keyword_results(keyword: str, limit: int = TOP_LIST_LIMIT) -> list[dict]:
+    """단발 호출용 — 브라우저를 새로 띄워 한 키워드를 수집한다."""
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True, args=BROWSER_ARGS)
-        context = await browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-            viewport={"width": 1280, "height": 900},
-            locale="ko-KR",
-        )
-        await context.add_init_script("""
-            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-            window.chrome = { runtime: {} };
-        """)
-        page = await context.new_page()
-
         try:
-            encoded_keyword = urllib.parse.quote(keyword)
-            search_url = f"https://map.naver.com/p/search/{encoded_keyword}"
-            print(f"  TOP 목록 접속 URL: {search_url}")
-            await page.goto(search_url, wait_until="domcontentloaded", timeout=40000)
-            await asyncio.sleep(random.uniform(3, 5))
-
-            frame = None
-            for _ in range(15):
-                for f in page.frames:
-                    if "search" in f.url and f.url != page.url:
-                        frame = f
-                        break
-                if frame:
-                    break
-                await asyncio.sleep(1)
-
-            if not frame:
-                iframe_el = await page.query_selector("iframe#searchIframe")
-                if iframe_el:
-                    frame = await iframe_el.content_frame()
-            if not frame:
-                frame = page
-
-            results = await _collect_results_from_frame(frame, limit)
-
-            print(f"  TOP 목록 {len(results)}개 수집")
-            return results
-        except Exception as e:
-            print(f"  TOP 목록 수집 오류 [{keyword}]: {e}")
-            import traceback
-            traceback.print_exc()
-            return []
+            context = await _new_stealth_context(browser)
+            return await _collect_keyword_in_context(context, keyword, limit)
         finally:
             await browser.close()
 
@@ -635,7 +640,7 @@ async def search_place_rank(keyword: str, target_place_id: str, target_place_nam
                     break
 
             if rank == -1:
-                print(f"  못찾음 → 100위 밖")
+                print(f"  못찾음 → {TOP_LIST_LIMIT}위 밖")
 
         except Exception as e:
             print(f"  크롤링 오류 [{keyword}]: {e}")
@@ -735,87 +740,98 @@ async def run_daily_check(user_id: str | None = None):
         unique_keywords = list(pairs_by_keyword.keys())
         total_keywords = len(unique_keywords)
 
-        for keyword_index, keyword in enumerate(unique_keywords, start=1):
-            # 이 키워드에서 오늘 아직 체크하지 않은 플레이스만 대상으로 남긴다.
-            pending_pairs = [
-                pair for pair in pairs_by_keyword[keyword]
-                if (pair["place"]["place_id"], keyword) not in checked_today
-            ]
-            skipped = len(pairs_by_keyword[keyword]) - len(pending_pairs)
-            summary["skipped_already_checked"] += skipped
+        # 이 사용자의 모든 조합이 오늘 이미 체크됐으면 브라우저를 아예 띄우지 않는다.
+        has_pending = any(
+            (pair["place"]["place_id"], kw) not in checked_today
+            for kw in unique_keywords
+            for pair in pairs_by_keyword[kw]
+        )
+        if not has_pending:
+            summary["skipped_already_checked"] += sum(len(v) for v in pairs_by_keyword.values())
+            print(f"  ⏭️ 사용자 {owner_uid}: 오늘 모든 키워드 이미 체크됨 — 건너뜀")
+            continue
 
-            if not pending_pairs:
-                # 이 키워드의 모든 플레이스가 오늘 이미 체크됨 → 크롤링 자체를 건너뜀
-                print(f"  ⏭️ [{keyword}] 오늘 이미 체크됨 — 건너뜀")
-                await _set_check_progress(
-                    owner_uid,
-                    f"{keyword} 오늘 이미 체크됨 — 건너뜀 ({keyword_index}/{total_keywords})",
-                    {"current_keyword": keyword, "keyword_index": keyword_index, "keyword_total": total_keywords},
-                )
-                continue
-
-            await _set_check_progress(
-                owner_uid,
-                f"{keyword} TOP {TOP_LIST_LIMIT} 수집 중 ({keyword_index}/{total_keywords})",
-                {"current_keyword": keyword, "keyword_index": keyword_index, "keyword_total": total_keywords},
-            )
-
+        # 브라우저를 한 번만 띄워 이 사용자의 모든 키워드에 재사용 (기동 오버헤드 제거)
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True, args=BROWSER_ARGS)
             try:
-                keyword_results = await asyncio.wait_for(
-                    search_keyword_results(keyword, TOP_LIST_LIMIT),
-                    timeout=KEYWORD_CRAWL_TIMEOUT,
-                )
-            except asyncio.TimeoutError:
-                keyword_results = []
-                print(f"  ⏱️ [{keyword}] 크롤 타임아웃({KEYWORD_CRAWL_TIMEOUT}s) — 건너뜀")
-            if not keyword_results:
-                # 수집 0건 = 크롤링 실패로 간주 (네이버 구조 변경/차단 가능성).
-                # "순위 밖(-1)"으로 잘못 기록하지 않도록 이 키워드는 저장을 건너뜀.
-                summary["failed_keywords"].append(keyword)
-                print(f"  ⚠️ [{keyword}] 검색 결과 수집 실패 — 순위 저장 건너뜀")
-                await _set_check_progress(
-                    owner_uid,
-                    f"{keyword} 수집 실패 — 저장 건너뜀 ({keyword_index}/{total_keywords})",
-                    {"current_keyword": keyword, "keyword_index": keyword_index, "keyword_total": total_keywords},
-                )
-                continue
+                context = await _new_stealth_context(browser)
 
-            await database.save_keyword_results(
-                keyword,
-                keyword_results,
-                today,
-                owner_uid,
-            )
-            summary["keyword_results_saved"] += len(keyword_results)
-            rank_by_place_id, rank_by_name = _build_rank_indexes(keyword_results)
+                for keyword_index, keyword in enumerate(unique_keywords, start=1):
+                    # 이 키워드에서 오늘 아직 체크하지 않은 플레이스만 대상으로 남긴다.
+                    pending_pairs = [
+                        pair for pair in pairs_by_keyword[keyword]
+                        if (pair["place"]["place_id"], keyword) not in checked_today
+                    ]
+                    skipped = len(pairs_by_keyword[keyword]) - len(pending_pairs)
+                    summary["skipped_already_checked"] += skipped
 
-            for pair in pending_pairs:
-                place = pair["place"]
-                place_id = place["place_id"]
-                place_name = place["place_name"]
-                print(f"  사용자 {owner_uid} 체크 중: [{keyword}] {place_name}({place_id})")
+                    if not pending_pairs:
+                        print(f"  ⏭️ [{keyword}] 오늘 이미 체크됨 — 건너뜀")
+                        await _set_check_progress(
+                            owner_uid,
+                            f"{keyword} 오늘 이미 체크됨 — 건너뜀 ({keyword_index}/{total_keywords})",
+                            {"current_keyword": keyword, "keyword_index": keyword_index, "keyword_total": total_keywords},
+                        )
+                        continue
 
-                rank = rank_by_place_id.get(place_id)
-                if rank is None:
-                    rank = rank_by_name.get(_normalize_place_name(place_name))
-                if rank is None:
-                    rank = _rank_from_place_name(keyword_results, place_name)
-                if rank is None:
-                    rank = -1
-                await database.save_ranking(place_id, keyword, rank, today, owner_uid)
-                summary["rankings_saved"] += 1
+                    await _set_check_progress(
+                        owner_uid,
+                        f"{keyword} TOP {TOP_LIST_LIMIT} 수집 중 ({keyword_index}/{total_keywords})",
+                        {"current_keyword": keyword, "keyword_index": keyword_index, "keyword_total": total_keywords},
+                    )
 
-                if rank > 0:
-                    rank_str = f"{rank}위"
-                else:
-                    rank_str = f"{MAX_RANK}위 밖"
-                print(f"  결과: [{keyword}] {place_name} → {rank_str}")
+                    try:
+                        keyword_results = await asyncio.wait_for(
+                            _collect_keyword_in_context(context, keyword, TOP_LIST_LIMIT),
+                            timeout=KEYWORD_CRAWL_TIMEOUT,
+                        )
+                    except asyncio.TimeoutError:
+                        keyword_results = []
+                        print(f"  ⏱️ [{keyword}] 크롤 타임아웃({KEYWORD_CRAWL_TIMEOUT}s) — 건너뜀")
 
-            await _set_check_progress(
-                owner_uid,
-                f"{keyword} 기본 체크 저장 완료 ({keyword_index}/{total_keywords})",
-                {"current_keyword": keyword, "keyword_index": keyword_index, "keyword_total": total_keywords},
-            )
+                    if not keyword_results:
+                        # 수집 0건 = 크롤링 실패로 간주 (네이버 구조 변경/차단 가능성).
+                        # "순위 밖(-1)"으로 잘못 기록하지 않도록 이 키워드는 저장을 건너뜀.
+                        summary["failed_keywords"].append(keyword)
+                        print(f"  ⚠️ [{keyword}] 검색 결과 수집 실패 — 순위 저장 건너뜀")
+                        await _set_check_progress(
+                            owner_uid,
+                            f"{keyword} 수집 실패 — 저장 건너뜀 ({keyword_index}/{total_keywords})",
+                            {"current_keyword": keyword, "keyword_index": keyword_index, "keyword_total": total_keywords},
+                        )
+                        continue
+
+                    await database.save_keyword_results(keyword, keyword_results, today, owner_uid)
+                    summary["keyword_results_saved"] += len(keyword_results)
+                    rank_by_place_id, rank_by_name = _build_rank_indexes(keyword_results)
+
+                    for pair in pending_pairs:
+                        place = pair["place"]
+                        place_id = place["place_id"]
+                        place_name = place["place_name"]
+                        print(f"  사용자 {owner_uid} 체크 중: [{keyword}] {place_name}({place_id})")
+
+                        rank = rank_by_place_id.get(place_id)
+                        if rank is None:
+                            rank = rank_by_name.get(_normalize_place_name(place_name))
+                        if rank is None:
+                            rank = _rank_from_place_name(keyword_results, place_name)
+                        if rank is None:
+                            rank = -1
+                        await database.save_ranking(place_id, keyword, rank, today, owner_uid)
+                        summary["rankings_saved"] += 1
+
+                        rank_str = f"{rank}위" if rank > 0 else f"{TOP_LIST_LIMIT}위 밖"
+                        print(f"  결과: [{keyword}] {place_name} → {rank_str}")
+
+                    await _set_check_progress(
+                        owner_uid,
+                        f"{keyword} 기본 체크 저장 완료 ({keyword_index}/{total_keywords})",
+                        {"current_keyword": keyword, "keyword_index": keyword_index, "keyword_total": total_keywords},
+                    )
+            finally:
+                await browser.close()
 
     print(f"[{_now_kst().strftime('%Y-%m-%d %H:%M:%S')}] 순위 체크 완료")
     return summary

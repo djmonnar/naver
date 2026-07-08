@@ -668,7 +668,7 @@
 
     <section class="card">
       <div class="card-head">
-        <h2 class="card-title">"{{ selected_keyword or '키워드' }}" TOP 100</h2>
+        <h2 class="card-title">"{{ selected_keyword or '키워드' }}" TOP 50</h2>
         {% if top_results_date %}
         <span class="date-pill">{{ top_results_date[5:] | replace('-', '/') }} 기준</span>
         {% endif %}
@@ -691,7 +691,7 @@
         </tbody>
       </table>
       {% else %}
-      <div class="empty-state">아직 TOP 100 데이터가 없습니다.</div>
+      <div class="empty-state">아직 TOP 50 데이터가 없습니다.</div>
       {% endif %}
     </section>
   </div>
@@ -709,7 +709,7 @@
           <div class="current-name">{{ row.place_name or row.place_id }}</div>
           <div class="current-sub">{{ row.keyword }} · {{ row.date }}</div>
         </div>
-        <div class="current-rank">{% if row.rank > 0 %}{{ row.rank }}위{% else %}100위 밖{% endif %}</div>
+        <div class="current-rank">{% if row.rank > 0 %}{{ row.rank }}위{% else %}50위 밖{% endif %}</div>
       </div>
       {% endfor %}
     </div>
@@ -852,7 +852,7 @@ function drawChart(range = '7') {
           bodyFont: { family: 'Noto Sans KR', size: 20, weight: 900 },
           callbacks: {
             title: items => points[items[0].dataIndex]?.date || '',
-            label: item => item.parsed.y ? `${item.parsed.y}위` : '100위 밖'
+            label: item => item.parsed.y ? `${item.parsed.y}위` : '50위 밖'
           }
         }
       },
