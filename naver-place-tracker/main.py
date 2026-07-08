@@ -1,6 +1,7 @@
 from fastapi import FastAPI, Request, Form, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
+from fastapi.middleware.cors import CORSMiddleware
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from pydantic import BaseModel
@@ -17,7 +18,7 @@ from firebase_config import get_admin_app, get_data_backend, get_web_config, use
 app = FastAPI(title="네이버 플레이스 순위 트래커")
 templates = Jinja2Templates(directory="templates")
 scheduler = AsyncIOScheduler(timezone="Asia/Seoul")
-APP_VERSION = "top100-tracking-20260708"
+APP_VERSION = "cors-restore-20260708"
 ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "djmonnar4@gmail.com").strip().lower()
 MANUAL_CHECK_LIMIT_PER_DAY = int(os.environ.get("MANUAL_CHECK_LIMIT_PER_DAY", "3"))
 # 이 일수 이상 로그인하지 않은 사용자는 매일 자동 체크에서 제외 (수동 체크는 가능)
@@ -26,6 +27,15 @@ RUNNING_RANK_CHECKS: set[str] = set()
 QUEUED_RANK_CHECK_USERS: set[str] = set()
 RANK_CHECK_QUEUE: asyncio.Queue | None = None
 RANK_CHECK_WORKER_TASK: asyncio.Task | None = None
+
+# 프런트엔드(djmonnar.github.io)가 이 API를 교차 출처로 호출하므로 CORS 허용.
+# /api/* 는 Firebase Bearer 토큰으로 인증하며 쿠키를 쓰지 않으므로 origin "*" 로 둔다.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.middleware("http")
