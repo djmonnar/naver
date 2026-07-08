@@ -17,7 +17,8 @@ from firebase_config import get_admin_app, get_data_backend, get_web_config, use
 app = FastAPI(title="네이버 플레이스 순위 트래커 + 연해주 예약")
 templates = Jinja2Templates(directory="templates")
 scheduler = AsyncIOScheduler(timezone="Asia/Seoul")
-APP_VERSION = "place-keyword-scope-20260708"
+APP_VERSION = "member-admin-mode-20260708"
+ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "djmonnar4@gmail.com").strip().lower()
 RUNNING_RANK_CHECKS: set[str] = set()
 
 # CORS (예약 페이지용)
@@ -127,6 +128,77 @@ async def server_status():
     }
 
 
+def _is_admin_user(user: dict | None) -> bool:
+    return (user or {}).get("email", "").strip().lower() == ADMIN_EMAIL
+
+
+def _profile_complete(profile: dict | None) -> bool:
+    return bool(
+        profile
+        and profile.get("profile_complete")
+        and str(profile.get("name") or "").strip()
+        and str(profile.get("email") or "").strip()
+        and str(profile.get("business_name") or "").strip()
+    )
+
+
+async def _require_member_profile(user: dict) -> None:
+    if not uses_firestore():
+        return
+
+    def _get_profile_sync():
+        from firebase_admin import firestore
+
+        get_admin_app()
+        snapshot = firestore.client().collection("users").document(user["uid"]).get()
+        return snapshot.to_dict() or {}
+
+    profile = await asyncio.to_thread(_get_profile_sync)
+    if not _profile_complete(profile):
+        raise HTTPException(status_code=403, detail="member_profile_required")
+
+
+@app.get("/api/admin/users")
+async def api_admin_users(request: Request):
+    try:
+        user = await auth.authenticate_bearer_request(request, raise_config_errors=True)
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Render Firebase Admin 환경변수를 확인해주세요.",
+        ) from exc
+
+    if not user:
+        raise HTTPException(status_code=401, detail="Firebase 로그인이 필요합니다.")
+    if not _is_admin_user(user):
+        raise HTTPException(status_code=403, detail="admin_only")
+    if not uses_firestore():
+        raise HTTPException(status_code=503, detail="Render DATA_BACKEND=firestore 환경변수를 확인해주세요.")
+
+    def _list_users_sync():
+        from firebase_admin import firestore
+
+        get_admin_app()
+        rows = []
+        for doc_snapshot in firestore.client().collection("users").stream():
+            data = doc_snapshot.to_dict() or {}
+            rows.append({
+                "uid": doc_snapshot.id,
+                "name": data.get("name") or data.get("auth_name") or "",
+                "email": data.get("email") or "",
+                "business_name": data.get("business_name") or "",
+                "profile_complete": bool(data.get("profile_complete")),
+                "updated_at": data.get("updated_at") or "",
+                "last_login_at": data.get("last_login_at") or "",
+                "created_at": data.get("created_at") or "",
+            })
+        rows.sort(key=lambda row: (row["profile_complete"], row["last_login_at"], row["updated_at"]), reverse=True)
+        return rows
+
+    users = await asyncio.to_thread(_list_users_sync)
+    return JSONResponse({"status": "ok", "users": users})
+
+
 @app.get("/api/places/search")
 async def api_search_places(request: Request, q: str = "", limit: int = 5):
     try:
@@ -140,6 +212,7 @@ async def api_search_places(request: Request, q: str = "", limit: int = 5):
     if not user:
         raise HTTPException(status_code=401, detail="Firebase 로그인이 필요합니다.")
 
+    await _require_member_profile(user)
     return JSONResponse(await _search_places_payload(q, limit))
 
 
@@ -515,6 +588,7 @@ async def api_check_now(request: Request, background_tasks: BackgroundTasks):
             detail="Render DATA_BACKEND=firestore 환경변수를 확인해주세요.",
         )
 
+    await _require_member_profile(user)
     await database.ensure_user(
         user["uid"],
         user.get("email"),

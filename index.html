@@ -108,6 +108,61 @@
 
     .auth-message.error { color: var(--red); }
 
+    .profile-screen {
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+    }
+
+    .profile-panel {
+      width: min(100%, 460px);
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      box-shadow: var(--shadow);
+      padding: 26px;
+    }
+
+    .profile-form {
+      display: grid;
+      gap: 12px;
+    }
+
+    .profile-field {
+      display: grid;
+      gap: 7px;
+    }
+
+    .profile-field label {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 900;
+    }
+
+    .profile-field input {
+      width: 100%;
+      min-height: 44px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #fbfcfe;
+      color: var(--text);
+      outline: none;
+      padding: 0 12px;
+      font-size: 14px;
+    }
+
+    .profile-field input:read-only {
+      color: var(--muted);
+      background: var(--soft);
+    }
+
+    .profile-actions {
+      display: flex;
+      gap: 8px;
+      margin-top: 4px;
+    }
+
     .app {
       width: min(100%, 1180px);
       margin: 0 auto;
@@ -188,6 +243,53 @@
     }
 
     .text-button:hover { color: var(--blue); border-color: #bed3ff; }
+
+    .admin-card {
+      display: grid;
+      gap: 12px;
+    }
+
+    .admin-meta {
+      margin: -6px 0 0;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .admin-table-wrap {
+      overflow-x: auto;
+      border: 1px solid var(--line-soft);
+      border-radius: 12px;
+    }
+
+    .admin-table {
+      width: 100%;
+      min-width: 720px;
+      border-collapse: collapse;
+      table-layout: fixed;
+    }
+
+    .admin-table th,
+    .admin-table td {
+      padding: 11px 10px;
+      border-bottom: 1px solid var(--line-soft);
+      text-align: left;
+      font-size: 13px;
+      vertical-align: middle;
+    }
+
+    .admin-table th {
+      color: var(--muted);
+      font-weight: 900;
+      background: #fbfcfe;
+    }
+
+    .admin-table td {
+      color: #465264;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
 
     .selector-card,
     .card {
@@ -700,6 +802,32 @@
     </div>
   </section>
 
+  <section id="profileScreen" class="profile-screen hidden">
+    <div class="profile-panel">
+      <h1 class="auth-title">회원 정보 입력</h1>
+      <p class="auth-subtitle">회원 정보를 저장해야 순위 기록기를 사용할 수 있습니다.</p>
+      <form id="memberProfileForm" class="profile-form">
+        <div class="profile-field">
+          <label for="memberNameInput">이름</label>
+          <input id="memberNameInput" name="member_name" placeholder="이름" required>
+        </div>
+        <div class="profile-field">
+          <label for="memberEmailInput">이메일주소</label>
+          <input id="memberEmailInput" name="member_email" placeholder="이메일주소" type="email" readonly required>
+        </div>
+        <div class="profile-field">
+          <label for="businessNameInput">업체명</label>
+          <input id="businessNameInput" name="business_name" placeholder="업체명" required>
+        </div>
+        <div class="profile-actions">
+          <button id="profileSaveBtn" class="primary-button full" type="submit">회원 정보 저장</button>
+          <button id="profileLogoutBtn" class="text-button" type="button">로그아웃</button>
+        </div>
+      </form>
+      <div id="profileMessage" class="auth-message"></div>
+    </div>
+  </section>
+
   <main id="appShell" class="app hidden">
     <header class="topbar">
       <div class="brand">
@@ -709,9 +837,32 @@
       <div class="account">
         <div id="avatar" class="avatar">U</div>
         <span id="accountName" class="account-name"></span>
+        <button id="adminModeBtn" class="text-button hidden" type="button">관리자</button>
         <button id="logoutBtn" class="text-button" type="button">로그아웃</button>
       </div>
     </header>
+
+    <section id="adminPanel" class="card admin-card hidden">
+      <div class="card-head">
+        <h2 class="card-title">관리자 모드</h2>
+        <button id="adminRefreshBtn" class="primary-button" type="button">회원 새로고침</button>
+      </div>
+      <p id="adminStatus" class="admin-meta">회원 정보를 불러올 수 있습니다.</p>
+      <div class="admin-table-wrap">
+        <table class="admin-table">
+          <thead>
+            <tr>
+              <th>이름</th>
+              <th>이메일주소</th>
+              <th>업체명</th>
+              <th>상태</th>
+              <th>최근 접속</th>
+            </tr>
+          </thead>
+          <tbody id="adminUserRows"></tbody>
+        </table>
+      </div>
+    </section>
 
     <section class="selector-card">
       <div class="selector-grid">
@@ -871,6 +1022,7 @@
     };
     const CHECK_API_BASE_URL = "https://naver-0zwy.onrender.com";
     const CHECK_STALE_MS = 2 * 60 * 1000;
+    const ADMIN_EMAIL = "djmonnar4@gmail.com";
 
     const app = initializeApp(firebaseConfig);
     const auth = getAuth(app);
@@ -887,6 +1039,12 @@
       rankings: [],
       keywordResults: [],
       checkStatus: null,
+      userProfile: null,
+      isAdmin: false,
+      adminUsers: [],
+      adminLoading: false,
+      adminVisible: false,
+      dataSubscriptionsStarted: false,
       placeSearchResults: [],
       placeSearchLoading: false,
       placeSearchError: "",
@@ -902,6 +1060,10 @@
 
     $("googleLoginBtn").addEventListener("click", signInWithGoogle);
     $("logoutBtn").addEventListener("click", () => signOut(auth));
+    $("profileLogoutBtn").addEventListener("click", () => signOut(auth));
+    $("memberProfileForm").addEventListener("submit", saveMemberProfile);
+    $("adminModeBtn").addEventListener("click", toggleAdminMode);
+    $("adminRefreshBtn").addEventListener("click", loadAdminUsers);
     $("checkBtn").addEventListener("click", runRenderCheck);
     $("checkBtnSecondary").addEventListener("click", runRenderCheck);
     $("placeSelect").addEventListener("change", (event) => {
@@ -943,15 +1105,19 @@
       state.user = user;
       if (!user) {
         $("authScreen").classList.remove("hidden");
+        $("profileScreen").classList.add("hidden");
         $("appShell").classList.add("hidden");
         return;
       }
 
       $("authScreen").classList.add("hidden");
-      $("appShell").classList.remove("hidden");
-      loadSelection();
-      renderAccount();
+      $("profileScreen").classList.remove("hidden");
+      $("appShell").classList.add("hidden");
+      state.isAdmin = normalizeEmail(user.email) === ADMIN_EMAIL;
       await ensureUserDoc(user);
+      loadSelection();
+      renderProfileForm();
+      renderAccount();
       subscribeUserData(user.uid);
     });
 
@@ -988,10 +1154,48 @@
     async function ensureUserDoc(user) {
       await setDoc(doc(db, "users", user.uid), {
         email: user.email || "",
-        name: user.displayName || "",
+        auth_name: user.displayName || "",
         photo_url: user.photoURL || "",
-        updated_at: nowText()
+        is_admin_email: state.isAdmin,
+        last_login_at: nowText()
       }, { merge: true });
+    }
+
+    async function saveMemberProfile(event) {
+      event.preventDefault();
+      if (!state.user) return;
+
+      const name = $("memberNameInput").value.trim();
+      const email = $("memberEmailInput").value.trim() || state.user.email || "";
+      const businessName = $("businessNameInput").value.trim();
+      if (!name || !email || !businessName) {
+        $("profileMessage").textContent = "이름, 이메일주소, 업체명을 모두 입력해주세요.";
+        $("profileMessage").className = "auth-message error";
+        return;
+      }
+
+      $("profileSaveBtn").disabled = true;
+      $("profileSaveBtn").textContent = "저장 중";
+      $("profileMessage").textContent = "";
+      $("profileMessage").className = "auth-message";
+
+      try {
+        await setDoc(doc(db, "users", state.user.uid), {
+          name,
+          email,
+          business_name: businessName,
+          profile_complete: true,
+          is_admin_email: state.isAdmin,
+          updated_at: nowText()
+        }, { merge: true });
+        showToast("회원 정보를 저장했습니다.");
+      } catch (error) {
+        $("profileMessage").textContent = firebaseMessage(error);
+        $("profileMessage").className = "auth-message error";
+      } finally {
+        $("profileSaveBtn").disabled = false;
+        $("profileSaveBtn").textContent = "회원 정보 저장";
+      }
     }
 
     function subscribeUserData(uid) {
@@ -999,12 +1203,25 @@
       const userUnsubscribe = onSnapshot(
         doc(db, ...base),
         (snapshot) => {
-          state.checkStatus = snapshot.data()?.check_status || null;
+          const data = snapshot.data() || {};
+          state.userProfile = data;
+          state.checkStatus = data.check_status || null;
+          renderProfileGate();
+          if (isProfileComplete()) {
+            startDataSubscriptions(uid);
+          }
+          renderAccount();
           renderCheckStatus();
         },
         (error) => showToast(firebaseMessage(error))
       );
       state.unsubscribers.push(userUnsubscribe);
+    }
+
+    function startDataSubscriptions(uid) {
+      if (state.dataSubscriptionsStarted) return;
+      state.dataSubscriptionsStarted = true;
+      const base = ["users", uid];
       listenCollection([...base, "places"], (rows) => {
         state.places = rows.sort((a, b) => (b.created_at || "").localeCompare(a.created_at || ""));
         render();
@@ -1040,6 +1257,45 @@
       state.rankings = [];
       state.keywordResults = [];
       state.checkStatus = null;
+      state.userProfile = null;
+      state.isAdmin = false;
+      state.adminUsers = [];
+      state.adminVisible = false;
+      state.adminLoading = false;
+      state.dataSubscriptionsStarted = false;
+    }
+
+    function isProfileComplete(profile = state.userProfile) {
+      return Boolean(
+        profile?.profile_complete &&
+        String(profile?.name || "").trim() &&
+        String(profile?.email || "").trim() &&
+        String(profile?.business_name || "").trim()
+      );
+    }
+
+    function renderProfileForm() {
+      if (!state.user) return;
+      const profile = state.userProfile || {};
+      $("memberNameInput").value = profile.name || state.user.displayName || "";
+      $("memberEmailInput").value = profile.email || state.user.email || "";
+      $("businessNameInput").value = profile.business_name || "";
+    }
+
+    function renderProfileGate() {
+      if (!state.user) return;
+      renderProfileForm();
+      const complete = isProfileComplete();
+      $("profileScreen").classList.toggle("hidden", complete);
+      $("appShell").classList.toggle("hidden", !complete);
+      $("adminModeBtn").classList.toggle("hidden", !state.isAdmin || !complete);
+      if (!complete) {
+        state.adminVisible = false;
+      }
+      $("adminPanel").classList.toggle("hidden", !state.adminVisible || !state.isAdmin || !complete);
+      if (complete) {
+        render();
+      }
     }
 
     function upsertPlaceState(place) {
@@ -1280,12 +1536,65 @@
 
     function renderAccount() {
       const user = state.user;
-      $("accountName").textContent = user.displayName || user.email || user.uid;
+      const profile = state.userProfile || {};
+      $("accountName").textContent = profile.name || user.displayName || user.email || user.uid;
       if (user.photoURL) {
         $("avatar").innerHTML = `<img src="${escapeHtml(user.photoURL)}" alt="">`;
       } else {
-        $("avatar").textContent = (user.displayName || user.email || "U").slice(0, 1).toUpperCase();
+        $("avatar").textContent = (profile.name || user.displayName || user.email || "U").slice(0, 1).toUpperCase();
       }
+      $("adminModeBtn").classList.toggle("hidden", !state.isAdmin || !isProfileComplete());
+    }
+
+    async function toggleAdminMode() {
+      if (!state.isAdmin) return;
+      state.adminVisible = !state.adminVisible;
+      $("adminPanel").classList.toggle("hidden", !state.adminVisible);
+      if (state.adminVisible && !state.adminUsers.length) {
+        await loadAdminUsers();
+      }
+    }
+
+    async function loadAdminUsers() {
+      if (!state.user || !state.isAdmin || state.adminLoading) return;
+      state.adminLoading = true;
+      $("adminRefreshBtn").disabled = true;
+      $("adminRefreshBtn").textContent = "불러오는 중";
+      $("adminStatus").textContent = "회원 정보를 불러오는 중입니다.";
+
+      try {
+        const idToken = await state.user.getIdToken();
+        const response = await fetch(`${CHECK_API_BASE_URL}/api/admin/users`, {
+          headers: {
+            "Authorization": `Bearer ${idToken}`
+          }
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(payload.detail || "admin_failed");
+        }
+        state.adminUsers = Array.isArray(payload.users) ? payload.users : [];
+        renderAdminUsers();
+      } catch (error) {
+        $("adminStatus").textContent = renderAdminMessage(error);
+      } finally {
+        state.adminLoading = false;
+        $("adminRefreshBtn").disabled = false;
+        $("adminRefreshBtn").textContent = "회원 새로고침";
+      }
+    }
+
+    function renderAdminUsers() {
+      $("adminStatus").textContent = `회원 ${state.adminUsers.length}명`;
+      $("adminUserRows").innerHTML = state.adminUsers.map((user) => `
+        <tr>
+          <td>${escapeHtml(user.name || "-")}</td>
+          <td>${escapeHtml(user.email || "-")}</td>
+          <td>${escapeHtml(user.business_name || "-")}</td>
+          <td>${user.profile_complete ? "완료" : "미완료"}</td>
+          <td>${escapeHtml(user.last_login_at || user.updated_at || "-")}</td>
+        </tr>
+      `).join("");
     }
 
     function renderSelectors() {
@@ -1803,6 +2112,9 @@
       if (text.includes("DATA_BACKEND")) {
         return "Render 환경변수 DATA_BACKEND=firestore를 확인해주세요.";
       }
+      if (text.includes("member_profile_required")) {
+        return "회원 정보를 먼저 저장해주세요.";
+      }
       return fallback;
     }
 
@@ -1814,11 +2126,23 @@
       return renderApiMessage(error, "플레이스 ID 검색에 실패했습니다.");
     }
 
+    function renderAdminMessage(error) {
+      const text = String(error?.message || "");
+      if (text.includes("403") || text.includes("admin_only")) {
+        return "관리자 계정만 회원 정보를 볼 수 있습니다.";
+      }
+      return renderApiMessage(error, "회원 정보를 불러오지 못했습니다.");
+    }
+
     function showToast(message) {
       const toast = $("toast");
       toast.textContent = message;
       toast.classList.add("show");
       setTimeout(() => toast.classList.remove("show"), 3500);
+    }
+
+    function normalizeEmail(value) {
+      return String(value || "").trim().toLowerCase();
     }
   </script>
 </body>

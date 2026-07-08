@@ -6,25 +6,36 @@ service cloud.firestore {
       return request.auth != null && request.auth.uid == userId;
     }
 
+    function hasCompleteProfile(userId) {
+      let profile = get(/databases/$(database)/documents/users/$(userId)).data;
+      return profile.profile_complete == true
+        && profile.name is string
+        && profile.name.size() > 0
+        && profile.email is string
+        && profile.email.size() > 0
+        && profile.business_name is string
+        && profile.business_name.size() > 0;
+    }
+
     match /users/{userId} {
       allow read, create, update: if isOwner(userId);
       allow delete: if false;
 
       match /places/{placeId} {
-        allow read, create, update, delete: if isOwner(userId);
+        allow read, create, update, delete: if isOwner(userId) && hasCompleteProfile(userId);
       }
 
       match /keywords/{keywordId} {
-        allow read, create, update, delete: if isOwner(userId);
+        allow read, create, update, delete: if isOwner(userId) && hasCompleteProfile(userId);
       }
 
       match /rankings/{rankingId} {
-        allow read: if isOwner(userId);
+        allow read: if isOwner(userId) && hasCompleteProfile(userId);
         allow write: if false;
       }
 
       match /keyword_results/{resultId} {
-        allow read: if isOwner(userId);
+        allow read: if isOwner(userId) && hasCompleteProfile(userId);
         allow write: if false;
       }
     }
