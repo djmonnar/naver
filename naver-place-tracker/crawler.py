@@ -347,10 +347,19 @@ async def search_place_rank(keyword: str, target_place_id: str) -> int:
 async def run_daily_check(user_id: str | None = None):
     today = datetime.now().strftime("%Y-%m-%d")
     user_ids = [user_id] if user_id else await database.list_user_ids()
+    summary = {
+        "users": len(user_ids),
+        "checked_users": 0,
+        "skipped_users": 0,
+        "places": 0,
+        "keywords": 0,
+        "rankings_saved": 0,
+        "keyword_results_saved": 0,
+    }
 
     if not user_ids:
         print("등록된 사용자 없음")
-        return
+        return summary
 
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 순위 체크 시작")
 
@@ -360,7 +369,12 @@ async def run_daily_check(user_id: str | None = None):
 
         if not places or not keywords:
             print(f"사용자 {owner_uid}: 등록된 플레이스 또는 키워드 없음")
+            summary["skipped_users"] += 1
             continue
+
+        summary["checked_users"] += 1
+        summary["places"] += len(places)
+        summary["keywords"] += len(keywords)
 
         for keyword_row in keywords:
             keyword = keyword_row["keyword"]
@@ -372,6 +386,7 @@ async def run_daily_check(user_id: str | None = None):
                     today,
                     owner_uid,
                 )
+                summary["keyword_results_saved"] += min(len(keyword_results), TOP_LIST_LIMIT)
             rank_by_place_id = {
                 row["place_id"]: row["rank"]
                 for row in keyword_results
@@ -389,6 +404,7 @@ async def run_daily_check(user_id: str | None = None):
                 if rank is None:
                     rank = -1
                 await database.save_ranking(place_id, keyword, rank, today, owner_uid)
+                summary["rankings_saved"] += 1
 
                 rank_str = f"{rank}위" if rank > 0 else "100위 밖"
                 print(f"  결과: [{keyword}] {place_name} → {rank_str}")
@@ -396,6 +412,7 @@ async def run_daily_check(user_id: str | None = None):
                 await asyncio.sleep(random.uniform(3, 7))
 
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 순위 체크 완료")
+    return summary
 
 if __name__ == "__main__":
     async def main():

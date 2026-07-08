@@ -12,7 +12,7 @@ import asyncio, sqlite3, os
 import auth
 import database
 import crawler
-from firebase_config import get_web_config, web_config_ready
+from firebase_config import get_admin_app, get_data_backend, get_web_config, uses_firestore, web_config_ready
 
 app = FastAPI(title="네이버 플레이스 순위 트래커 + 연해주 예약")
 templates = Jinja2Templates(directory="templates")
@@ -100,6 +100,27 @@ async def keep_alive():
 @app.get("/ping")
 async def ping():
     return {"status": "ok"}
+
+
+@app.get("/api/server/status")
+async def server_status():
+    admin_ready = False
+    admin_error = None
+    if uses_firestore():
+        try:
+            await asyncio.to_thread(get_admin_app)
+            admin_ready = True
+        except Exception as exc:
+            admin_error = exc.__class__.__name__
+
+    return {
+        "status": "ok",
+        "data_backend": get_data_backend(),
+        "uses_firestore": uses_firestore(),
+        "auth_enabled": auth.auth_enabled(),
+        "firebase_admin_ready": admin_ready,
+        "firebase_admin_error": admin_error,
+    }
 
 @app.on_event("startup")
 async def startup():
@@ -328,6 +349,39 @@ async def check_now(request: Request, background_tasks: BackgroundTasks):
     return JSONResponse({"status": "started", "message": "순위 체크를 시작했습니다."})
 
 
+async def _run_rank_check_job(user_id: str) -> None:
+    await database.set_check_status(
+        user_id,
+        "running",
+        "Render 서버에서 순위 체크 중입니다.",
+    )
+    try:
+        summary = await crawler.run_daily_check(user_id)
+    except Exception as exc:
+        await database.set_check_status(
+            user_id,
+            "error",
+            f"순위 체크 실패: {exc.__class__.__name__}",
+            {"error": str(exc)[:500]},
+        )
+        raise
+
+    rankings_saved = int((summary or {}).get("rankings_saved") or 0)
+    if rankings_saved > 0:
+        message = f"순위 체크 완료: {rankings_saved}건 저장"
+        state = "done"
+    else:
+        message = "순위 체크 완료: 저장된 순위가 없습니다."
+        state = "empty"
+
+    await database.set_check_status(
+        user_id,
+        state,
+        message,
+        summary or {},
+    )
+
+
 @app.post("/api/check/now")
 async def api_check_now(request: Request, background_tasks: BackgroundTasks):
     try:
@@ -340,6 +394,11 @@ async def api_check_now(request: Request, background_tasks: BackgroundTasks):
 
     if not user:
         raise HTTPException(status_code=401, detail="Firebase 로그인이 필요합니다.")
+    if not uses_firestore():
+        raise HTTPException(
+            status_code=503,
+            detail="Render DATA_BACKEND=firestore 환경변수를 확인해주세요.",
+        )
 
     await database.ensure_user(
         user["uid"],
@@ -347,10 +406,16 @@ async def api_check_now(request: Request, background_tasks: BackgroundTasks):
         user.get("name"),
         user.get("photo_url"),
     )
-    background_tasks.add_task(crawler.run_daily_check, user["uid"])
+    await database.set_check_status(
+        user["uid"],
+        "queued",
+        "Render 서버에 순위 체크를 요청했습니다.",
+    )
+    background_tasks.add_task(_run_rank_check_job, user["uid"])
     return JSONResponse({
         "status": "started",
         "message": "Render 서버에서 순위 체크를 시작했습니다.",
+        "data_backend": get_data_backend(),
     })
 
 

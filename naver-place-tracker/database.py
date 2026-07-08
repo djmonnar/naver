@@ -210,6 +210,30 @@ async def ensure_user(
         await asyncio.to_thread(_ensure_firestore_user_sync, owner_uid, email, name, photo_url)
 
 
+async def set_check_status(
+    user_id: str | None,
+    state: str,
+    message: str,
+    details: dict | None = None,
+) -> None:
+    owner_uid = _user_id(user_id)
+    payload = {
+        "state": state,
+        "message": message,
+        "updated_at": _now_text(),
+    }
+    if details:
+        payload.update(details)
+
+    if uses_firestore():
+        def _set_sync():
+            _ensure_firestore_user_sync(owner_uid)
+            _user_doc(owner_uid).set({"check_status": payload}, merge=True)
+
+        await asyncio.to_thread(_set_sync)
+        return
+
+
 async def list_user_ids() -> list[str]:
     if uses_firestore():
         def _list_sync():

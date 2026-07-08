@@ -797,6 +797,7 @@
       keywords: [],
       rankings: [],
       keywordResults: [],
+      checkStatus: null,
       selectedPlaceId: "",
       selectedKeyword: "",
       activeRange: "7",
@@ -890,6 +891,15 @@
 
     function subscribeUserData(uid) {
       const base = ["users", uid];
+      const userUnsubscribe = onSnapshot(
+        doc(db, ...base),
+        (snapshot) => {
+          state.checkStatus = snapshot.data()?.check_status || null;
+          renderCheckStatus();
+        },
+        (error) => showToast(firebaseMessage(error))
+      );
+      state.unsubscribers.push(userUnsubscribe);
       listenCollection([...base, "places"], (rows) => {
         state.places = rows.sort((a, b) => (b.created_at || "").localeCompare(a.created_at || ""));
         render();
@@ -924,6 +934,7 @@
       state.keywords = [];
       state.rankings = [];
       state.keywordResults = [];
+      state.checkStatus = null;
     }
 
     async function addPlace(event) {
@@ -1228,6 +1239,28 @@
     }
 
     function renderCheckStatus() {
+      const status = state.checkStatus;
+      if (status?.state === "queued") {
+        $("checkStatusText").textContent = "체크 요청됨";
+        return;
+      }
+      if (status?.state === "running") {
+        $("checkStatusText").textContent = "Render 서버에서 체크 중";
+        return;
+      }
+      if (status?.state === "done") {
+        $("checkStatusText").textContent = status.message || "순위 체크 완료";
+        return;
+      }
+      if (status?.state === "empty") {
+        $("checkStatusText").textContent = status.message || "저장된 순위가 없습니다";
+        return;
+      }
+      if (status?.state === "error") {
+        $("checkStatusText").textContent = status.message || "순위 체크 실패";
+        return;
+      }
+
       const hasPlaces = state.places.length > 0;
       const hasKeywords = state.keywords.length > 0;
       if (hasPlaces && hasKeywords) {
@@ -1365,6 +1398,9 @@
       }
       if (text.includes("Render Firebase Admin")) {
         return "Render 환경변수 FIREBASE_SERVICE_ACCOUNT_JSON을 확인해주세요.";
+      }
+      if (text.includes("DATA_BACKEND")) {
+        return "Render 환경변수 DATA_BACKEND=firestore를 확인해주세요.";
       }
       return "순위 체크 요청에 실패했습니다.";
     }
