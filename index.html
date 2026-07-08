@@ -1282,7 +1282,7 @@
       $("currentRows").classList.toggle("hidden", latest.length === 0);
       $("currentRows").innerHTML = latest.map((row) => {
         const place = state.places.find((item) => item.place_id === row.place_id);
-        const rankClass = row.pending ? "current-rank pending" : "current-rank";
+        const rankClass = row.pending || Number(row.rank) === 0 ? "current-rank pending" : "current-rank";
         return `
           <div class="current-row">
             <div class="current-main">
@@ -1471,7 +1471,9 @@
 
     function formatRank(rank) {
       const numeric = Number(rank);
-      return numeric > 0 ? `${numeric}위` : "100위 밖";
+      if (numeric > 0) return `${numeric}위`;
+      if (numeric === 0) return "상세 확인 중";
+      return "100위 밖";
     }
 
     function escapeHtml(value) {

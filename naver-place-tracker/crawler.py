@@ -347,6 +347,13 @@ async def search_place_rank(keyword: str, target_place_id: str) -> int:
         return rank
 
 
+async def _set_check_progress(user_id: str, message: str, details: dict | None = None) -> None:
+    try:
+        await database.set_check_status(user_id, "running", message, details)
+    except Exception as exc:
+        print(f"  체크 상태 업데이트 실패: {exc}")
+
+
 async def run_daily_check(user_id: str | None = None):
     today = datetime.now().strftime("%Y-%m-%d")
     user_ids = [user_id] if user_id else await database.list_user_ids()
@@ -379,17 +386,26 @@ async def run_daily_check(user_id: str | None = None):
         summary["places"] += len(places)
         summary["keywords"] += len(keywords)
 
-        for keyword_row in keywords:
+        pending_deep_checks = []
+        total_keywords = len(keywords)
+
+        for keyword_index, keyword_row in enumerate(keywords, start=1):
             keyword = keyword_row["keyword"]
-            keyword_results = await search_keyword_results(keyword, MAX_RANK)
+            await _set_check_progress(
+                owner_uid,
+                f"{keyword} TOP 30 수집 중 ({keyword_index}/{total_keywords})",
+                {"current_keyword": keyword, "keyword_index": keyword_index, "keyword_total": total_keywords},
+            )
+
+            keyword_results = await search_keyword_results(keyword, TOP_LIST_LIMIT)
             if keyword_results:
                 await database.save_keyword_results(
                     keyword,
-                    keyword_results[:TOP_LIST_LIMIT],
+                    keyword_results,
                     today,
                     owner_uid,
                 )
-                summary["keyword_results_saved"] += min(len(keyword_results), TOP_LIST_LIMIT)
+                summary["keyword_results_saved"] += len(keyword_results)
             rank_by_place_id = {
                 row["place_id"]: row["rank"]
                 for row in keyword_results
@@ -402,17 +418,46 @@ async def run_daily_check(user_id: str | None = None):
                 print(f"  사용자 {owner_uid} 체크 중: [{keyword}] {place_name}({place_id})")
 
                 rank = rank_by_place_id.get(place_id)
-                if rank is None and len(keyword_results) < MAX_RANK:
-                    rank = await search_place_rank(keyword, place_id)
                 if rank is None:
-                    rank = -1
+                    if len(keyword_results) >= TOP_LIST_LIMIT:
+                        rank = 0
+                        pending_deep_checks.append((keyword, place_id, place_name))
+                    else:
+                        rank = -1
                 await database.save_ranking(place_id, keyword, rank, today, owner_uid)
                 summary["rankings_saved"] += 1
 
-                rank_str = f"{rank}위" if rank > 0 else "100위 밖"
+                if rank > 0:
+                    rank_str = f"{rank}위"
+                elif rank == 0:
+                    rank_str = "상세 확인 중"
+                else:
+                    rank_str = "TOP 30 밖"
                 print(f"  결과: [{keyword}] {place_name} → {rank_str}")
 
-                await asyncio.sleep(random.uniform(3, 7))
+            await _set_check_progress(
+                owner_uid,
+                f"{keyword} 기본 체크 저장 완료 ({keyword_index}/{total_keywords})",
+                {"current_keyword": keyword, "keyword_index": keyword_index, "keyword_total": total_keywords},
+            )
+
+        total_deep_checks = len(pending_deep_checks)
+        for deep_index, (keyword, place_id, place_name) in enumerate(pending_deep_checks, start=1):
+            await _set_check_progress(
+                owner_uid,
+                f"{keyword} 상세 순위 확인 중 ({deep_index}/{total_deep_checks})",
+                {"current_keyword": keyword, "deep_index": deep_index, "deep_total": total_deep_checks},
+            )
+            print(f"  상세 확인 중: [{keyword}] {place_name}({place_id})")
+            rank = await search_place_rank(keyword, place_id)
+            if rank > 0:
+                await database.save_ranking(place_id, keyword, rank, today, owner_uid)
+                print(f"  상세 결과 갱신: [{keyword}] {place_name} → {rank}위")
+            else:
+                await database.save_ranking(place_id, keyword, -1, today, owner_uid)
+                print(f"  상세 결과: [{keyword}] {place_name} → 100위 밖")
+
+            await asyncio.sleep(random.uniform(1, 2))
 
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 순위 체크 완료")
     return summary
