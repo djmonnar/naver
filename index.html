@@ -1263,10 +1263,14 @@
       $("topTable").classList.toggle("hidden", latestRows.length === 0);
       $("topToggle").classList.toggle("hidden", latestRows.length <= 10);
       $("topToggle").textContent = state.topExpanded ? "10개만 보기" : `전체 ${latestRows.length}개 보기`;
+      const selectedPlace = state.places.find((place) => place.place_id === state.selectedPlaceId);
+      const selectedPlaceName = normalizePlaceName(selectedPlace?.place_name || "");
       $("topRows").innerHTML = visibleRows.map((row) => {
         const rank = Number(row.rank || 0);
         const rankClass = rank <= 3 ? `rank-${rank}` : "rank-other";
-        const target = row.place_id === state.selectedPlaceId ? "target" : "";
+        const target = row.place_id === state.selectedPlaceId || (
+          selectedPlaceName && normalizePlaceName(row.place_name || "") === selectedPlaceName
+        ) ? "target" : "";
         return `
           <tr class="${target}">
             <td><span class="rank-chip ${rankClass}">${rank}위</span></td>
@@ -1474,6 +1478,10 @@
       if (numeric > 0) return `${numeric}위`;
       if (numeric === 0) return "상세 확인 중";
       return "100위 밖";
+    }
+
+    function normalizePlaceName(name) {
+      return String(name || "").replace(/[\s·ㆍ\-_(){}\[\].,'"`]+/g, "").toLowerCase();
     }
 
     function escapeHtml(value) {

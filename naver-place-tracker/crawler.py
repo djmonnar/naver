@@ -24,6 +24,39 @@ def _clean_place_name(name: str) -> str:
     return "" if cleaned in blocked else cleaned
 
 
+def _normalize_place_name(name: str) -> str:
+    cleaned = _clean_place_name(name)
+    return re.sub(r"[\s·ㆍ\-_(){}\[\].,'\"`]+", "", cleaned).lower()
+
+
+def _build_rank_indexes(results: list[dict]) -> tuple[dict[str, int], dict[str, int]]:
+    by_place_id = {}
+    by_name = {}
+    duplicate_names = set()
+
+    for row in results:
+        rank = int(row.get("rank") or 0)
+        if rank <= 0:
+            continue
+
+        place_id = str(row.get("place_id") or "").strip()
+        if place_id:
+            by_place_id[place_id] = rank
+
+        name_key = _normalize_place_name(row.get("place_name") or "")
+        if not name_key:
+            continue
+        if name_key in by_name and by_name[name_key] != rank:
+            duplicate_names.add(name_key)
+            continue
+        by_name[name_key] = rank
+
+    for name_key in duplicate_names:
+        by_name.pop(name_key, None)
+
+    return by_place_id, by_name
+
+
 def _extract_place_name(content: str, place_id: str) -> str:
     id_pos = content.find(f'"id":"{place_id}"')
     if id_pos == -1:
@@ -238,7 +271,7 @@ async def search_keyword_results(keyword: str, limit: int = TOP_LIST_LIMIT) -> l
             encoded_keyword = urllib.parse.quote(keyword)
             search_url = f"https://map.naver.com/p/search/{encoded_keyword}"
             print(f"  TOP 목록 접속 URL: {search_url}")
-            await page.goto(search_url, wait_until="networkidle", timeout=40000)
+            await page.goto(search_url, wait_until="domcontentloaded", timeout=40000)
             await asyncio.sleep(random.uniform(3, 5))
 
             frame = None
@@ -270,7 +303,7 @@ async def search_keyword_results(keyword: str, limit: int = TOP_LIST_LIMIT) -> l
         finally:
             await browser.close()
 
-async def search_place_rank(keyword: str, target_place_id: str) -> int:
+async def search_place_rank(keyword: str, target_place_id: str, target_place_name: str | None = None) -> int:
     async with async_playwright() as p:
         browser = await p.chromium.launch(
             headless=True,
@@ -299,7 +332,7 @@ async def search_place_rank(keyword: str, target_place_id: str) -> int:
             search_url = f"https://map.naver.com/p/search/{encoded_keyword}"
             print(f"  접속 URL: {search_url}")
 
-            await page.goto(search_url, wait_until="networkidle", timeout=40000)
+            await page.goto(search_url, wait_until="domcontentloaded", timeout=40000)
             await asyncio.sleep(random.uniform(3, 5))
 
             frame = None
@@ -324,11 +357,15 @@ async def search_place_rank(keyword: str, target_place_id: str) -> int:
 
             results = await _collect_results_from_frame(frame, MAX_RANK)
             print(f"  목록에서 {len(results)}개 플레이스 발견")
+            target_name_key = _normalize_place_name(target_place_name or "")
             for row in results:
                 place_id = row.get("place_id")
+                place_name = row.get("place_name") or ""
                 real_rank = int(row.get("rank") or 0)
-                print(f"  {real_rank}위: {place_id}")
-                if place_id == target_place_id:
+                print(f"  {real_rank}위: {place_id or '-'} {place_name}")
+                if place_id == target_place_id or (
+                    target_name_key and _normalize_place_name(place_name) == target_name_key
+                ):
                     rank = real_rank
                     print(f"  ✅ 발견! 실제 {rank}위")
                     break
@@ -406,11 +443,7 @@ async def run_daily_check(user_id: str | None = None):
                     owner_uid,
                 )
                 summary["keyword_results_saved"] += len(keyword_results)
-            rank_by_place_id = {
-                row["place_id"]: row["rank"]
-                for row in keyword_results
-                if row.get("place_id")
-            }
+            rank_by_place_id, rank_by_name = _build_rank_indexes(keyword_results)
 
             for place in places:
                 place_id = place["place_id"]
@@ -418,6 +451,8 @@ async def run_daily_check(user_id: str | None = None):
                 print(f"  사용자 {owner_uid} 체크 중: [{keyword}] {place_name}({place_id})")
 
                 rank = rank_by_place_id.get(place_id)
+                if rank is None:
+                    rank = rank_by_name.get(_normalize_place_name(place_name))
                 if rank is None:
                     if len(keyword_results) >= TOP_LIST_LIMIT:
                         rank = 0
@@ -449,7 +484,7 @@ async def run_daily_check(user_id: str | None = None):
                 {"current_keyword": keyword, "deep_index": deep_index, "deep_total": total_deep_checks},
             )
             print(f"  상세 확인 중: [{keyword}] {place_name}({place_id})")
-            rank = await search_place_rank(keyword, place_id)
+            rank = await search_place_rank(keyword, place_id, place_name)
             if rank > 0:
                 await database.save_ranking(place_id, keyword, rank, today, owner_uid)
                 print(f"  상세 결과 갱신: [{keyword}] {place_name} → {rank}위")
