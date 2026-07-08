@@ -9,6 +9,15 @@ import database
 
 MAX_RANK = 100
 TOP_LIST_LIMIT = 30
+PLACE_SEARCH_LIMIT = 8
+
+_PLACE_ID_PATTERNS = [
+    re.compile(r"/p/search/[^?#]+/place/(\d+)"),
+    re.compile(r"https?://pcmap\.place\.naver\.com/[^/?#]+/(\d+)"),
+    re.compile(r"/(?:place|restaurant|hospital|hairshop|accommodation|attraction|cafe|shopping|beauty|mart|lodging|tour|culture|education|public|business|leisure|sports)/(\d+)"),
+    re.compile(r"[?&]placeId=(\d+)"),
+    re.compile(r"placeId[\"']?\s*[:=]\s*[\"']?(\d+)"),
+]
 
 
 def _decode_json_text(value: str) -> str:
@@ -27,6 +36,21 @@ def _clean_place_name(name: str) -> str:
 def _normalize_place_name(name: str) -> str:
     cleaned = _clean_place_name(name)
     return re.sub(r"[\s·ㆍ\-_(){}\[\].,'\"`]+", "", cleaned).lower()
+
+
+def _extract_place_id_from_text(value: str) -> str:
+    if not value:
+        return ""
+    for pattern in _PLACE_ID_PATTERNS:
+        match = pattern.search(value)
+        if match:
+            return next((group for group in match.groups() if group), "")
+    return ""
+
+
+def _extract_current_place_id(page) -> str:
+    urls = "\n".join([page.url, *[frame.url for frame in page.frames]])
+    return _extract_place_id_from_text(urls)
 
 
 def _build_rank_indexes(results: list[dict]) -> tuple[dict[str, int], dict[str, int]]:
@@ -302,6 +326,195 @@ async def search_keyword_results(keyword: str, limit: int = TOP_LIST_LIMIT) -> l
             return []
         finally:
             await browser.close()
+
+
+async def _get_search_frame(page):
+    frame = None
+    for _ in range(15):
+        for candidate in page.frames:
+            if "search" in candidate.url and candidate.url != page.url:
+                frame = candidate
+                break
+        if frame:
+            break
+        await asyncio.sleep(1)
+
+    if not frame:
+        iframe_el = await page.query_selector("iframe#searchIframe")
+        if iframe_el:
+            frame = await iframe_el.content_frame()
+    return frame or page
+
+
+async def _get_place_candidate_items(frame) -> list:
+    selectors = ["li.UEzoS", "li[data-laim-exp-id]", "li.VLTHu", "li.CHC5F"]
+    for selector in selectors:
+        items = await frame.query_selector_all(selector)
+        if items:
+            return items
+    return []
+
+
+async def _extract_place_candidate_meta(item) -> dict:
+    data = await item.evaluate("""
+        (el) => {
+            const textOf = (selector) => {
+                const target = el.querySelector(selector);
+                return target?.textContent?.trim() || "";
+            };
+            const lines = (el.innerText || "")
+                .split("\\n")
+                .map((line) => line.trim())
+                .filter(Boolean);
+            const name = [
+                "a.place_bluelink span",
+                "span.TYaxT",
+                "span.Fc1rA",
+                "span.YwYLL",
+                "strong",
+                "a.U70Fj"
+            ].map(textOf).find((value) => value && value.length > 1) || "";
+            const category = textOf("span.YzBgS");
+            const address = lines.find((line) =>
+                /^(서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|전북|전남|경북|경남|제주)\\s/.test(line)
+            ) || "";
+            const distance = lines.find((line) => /\\d+(\\.\\d+)?\\s*(m|km)$/.test(line)) || "";
+            return {
+                place_name: name,
+                category,
+                address,
+                distance,
+                text: lines.slice(0, 12).join(" · ")
+            };
+        }
+    """)
+    data["place_name"] = _clean_place_name(data.get("place_name") or "")
+    return data
+
+
+async def _click_candidate_for_place_id(page, item) -> str:
+    previous_url = page.url
+    before_place_id = _extract_current_place_id(page)
+
+    await item.evaluate("""
+        (el) => {
+            const target = el.querySelector("a.U70Fj, a.place_thumb, a[href='#'], button, [role='button']") || el;
+            for (const type of ["mouseover", "mousedown", "mouseup", "click"]) {
+                target.dispatchEvent(new MouseEvent(type, {
+                    bubbles: true,
+                    cancelable: true,
+                    view: window
+                }));
+            }
+        }
+    """)
+
+    for _ in range(12):
+        await asyncio.sleep(0.35)
+        if page.url != previous_url:
+            place_id = _extract_place_id_from_text(page.url) or _extract_current_place_id(page)
+            if place_id:
+                return place_id
+
+    place_id = _extract_current_place_id(page)
+    if place_id and place_id != before_place_id:
+        return place_id
+    return ""
+
+
+async def search_place_candidates(query: str, limit: int = 5) -> list[dict]:
+    query = (query or "").strip()
+    limit = max(1, min(int(limit or 5), PLACE_SEARCH_LIMIT))
+    if not query:
+        return []
+
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(
+            headless=True,
+            args=[
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+                "--disable-blink-features=AutomationControlled",
+                "--disable-dev-shm-usage",
+                "--disable-gpu",
+            ],
+        )
+        context = await browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            viewport={"width": 1280, "height": 900},
+            locale="ko-KR",
+        )
+        await context.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+            window.chrome = { runtime: {} };
+        """)
+        page = await context.new_page()
+
+        try:
+            encoded_query = urllib.parse.quote(query)
+            search_url = f"https://map.naver.com/p/search/{encoded_query}"
+            print(f"  플레이스 ID 검색 URL: {search_url}")
+            await page.goto(search_url, wait_until="domcontentloaded", timeout=40000)
+            await asyncio.sleep(random.uniform(3, 5))
+
+            frame = await _get_search_frame(page)
+            items = await _get_place_candidate_items(frame)
+            initial_place_id = _extract_current_place_id(page)
+
+            results = []
+            seen = set()
+            for index, item in enumerate(items[: limit * 2], start=1):
+                meta = await _extract_place_candidate_meta(item)
+                place_name = meta.get("place_name") or query
+                item_html = await item.inner_html()
+                place_id = _extract_place_id_from_text(item_html)
+
+                if index == 1 and initial_place_id:
+                    place_id = initial_place_id
+                if not place_id:
+                    place_id = await _click_candidate_for_place_id(page, item)
+
+                key = place_id or "|".join([
+                    _normalize_place_name(place_name),
+                    meta.get("category") or "",
+                    meta.get("address") or "",
+                    meta.get("distance") or "",
+                ])
+                if not key or key in seen:
+                    continue
+                seen.add(key)
+
+                results.append({
+                    "rank": len(results) + 1,
+                    "place_id": place_id,
+                    "place_name": place_name,
+                    "category": meta.get("category") or "",
+                    "address": meta.get("address") or "",
+                    "distance": meta.get("distance") or "",
+                })
+                if len(results) >= limit:
+                    break
+
+            if not results and initial_place_id:
+                results.append({
+                    "rank": 1,
+                    "place_id": initial_place_id,
+                    "place_name": query,
+                    "category": "",
+                    "address": "",
+                    "distance": "",
+                })
+
+            print(f"  플레이스 ID 후보 {len(results)}개 수집")
+            return results
+        except Exception as e:
+            print(f"  플레이스 ID 검색 오류 [{query}]: {e}")
+            import traceback
+            traceback.print_exc()
+            return []
+        finally:
+            await browser.close()
+
 
 async def search_place_rank(keyword: str, target_place_id: str, target_place_name: str | None = None) -> int:
     async with async_playwright() as p:

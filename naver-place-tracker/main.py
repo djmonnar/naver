@@ -17,7 +17,7 @@ from firebase_config import get_admin_app, get_data_backend, get_web_config, use
 app = FastAPI(title="네이버 플레이스 순위 트래커 + 연해주 예약")
 templates = Jinja2Templates(directory="templates")
 scheduler = AsyncIOScheduler(timezone="Asia/Seoul")
-APP_VERSION = "fast-name-match-20260708"
+APP_VERSION = "place-id-finder-20260708"
 RUNNING_RANK_CHECKS: set[str] = set()
 
 # CORS (예약 페이지용)
@@ -124,6 +124,51 @@ async def server_status():
         "auth_enabled": auth.auth_enabled(),
         "firebase_admin_ready": admin_ready,
         "firebase_admin_error": admin_error,
+    }
+
+
+@app.get("/api/places/search")
+async def api_search_places(request: Request, q: str = "", limit: int = 5):
+    try:
+        user = await auth.authenticate_bearer_request(request, raise_config_errors=True)
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Render Firebase Admin 환경변수를 확인해주세요.",
+        ) from exc
+
+    if not user:
+        raise HTTPException(status_code=401, detail="Firebase 로그인이 필요합니다.")
+
+    return JSONResponse(await _search_places_payload(q, limit))
+
+
+@app.get("/places/search")
+async def search_places(request: Request, q: str = "", limit: int = 5):
+    if not auth.get_request_user(request):
+        raise HTTPException(status_code=401, detail="Firebase 로그인이 필요합니다.")
+
+    return JSONResponse(await _search_places_payload(q, limit))
+
+
+async def _search_places_payload(q: str = "", limit: int = 5) -> dict:
+    query = (q or "").strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="검색어를 입력해주세요.")
+
+    safe_limit = max(1, min(int(limit or 5), crawler.PLACE_SEARCH_LIMIT))
+    try:
+        results = await asyncio.wait_for(
+            crawler.search_place_candidates(query, safe_limit),
+            timeout=60,
+        )
+    except asyncio.TimeoutError as exc:
+        raise HTTPException(status_code=504, detail="플레이스 ID 검색 시간이 초과되었습니다.") from exc
+
+    return {
+        "status": "ok",
+        "query": query,
+        "results": results,
     }
 
 @app.on_event("startup")

@@ -411,6 +411,75 @@
   .primary-button:disabled { opacity: 0.55; cursor: wait; }
   .primary-button.full { width: 100%; }
 
+  .finder-form {
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid var(--line-soft);
+  }
+
+  .finder-results {
+    display: grid;
+    gap: 8px;
+    margin: 0 0 12px;
+  }
+
+  .finder-message {
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1.5;
+    padding: 2px 0 10px;
+  }
+
+  .finder-row {
+    width: 100%;
+    min-width: 0;
+    border: 1px solid var(--line-soft);
+    border-radius: 12px;
+    background: #fff;
+    color: var(--text);
+    padding: 10px 11px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px;
+    align-items: center;
+    text-align: left;
+  }
+
+  .finder-row:hover {
+    border-color: #bed3ff;
+    background: #f8fbff;
+  }
+
+  .finder-main {
+    min-width: 0;
+    display: grid;
+    gap: 3px;
+  }
+
+  .finder-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 13px;
+    font-weight: 900;
+  }
+
+  .finder-meta {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 700;
+  }
+
+  .finder-id {
+    color: var(--blue);
+    font-size: 12px;
+    font-weight: 900;
+    font-family: 'Space Mono', monospace;
+  }
+
   .delete-button {
     border: 1px solid var(--line);
     border-radius: 999px;
@@ -658,13 +727,20 @@
         <h3 class="panel-title">플레이스</h3>
         <form action="/places/add" method="post">
           <div class="form-row">
-            <input name="place_name" placeholder="상호명" required>
+            <input id="dashboardPlaceNameInput" name="place_name" placeholder="상호명" required>
           </div>
           <div class="form-row">
-            <input name="place_id" placeholder="플레이스 ID" required>
+            <input id="dashboardPlaceIdInput" name="place_id" placeholder="플레이스 ID" required>
             <button type="submit" class="primary-button">추가</button>
           </div>
         </form>
+        <form id="placeFinderForm" class="finder-form">
+          <div class="form-row">
+            <input id="placeFinderInput" name="place_query" placeholder="상호명 + 지역">
+            <button id="placeFinderBtn" type="submit" class="primary-button">ID 찾기</button>
+          </div>
+        </form>
+        <div id="placeFinderResults" class="finder-results"></div>
         <div class="item-list">
           {% for place in places %}
           <div class="item-row">
@@ -826,6 +902,110 @@ async function runCheck() {
     btn.disabled = false;
     btn.textContent = '지금 체크';
   }
+}
+
+let placeSearchResults = [];
+let placeSearchLoading = false;
+let placeSearchError = '';
+
+const placeFinderForm = document.getElementById('placeFinderForm');
+const placeFinderResults = document.getElementById('placeFinderResults');
+
+placeFinderForm?.addEventListener('submit', searchPlaceIds);
+placeFinderResults?.addEventListener('click', selectPlaceCandidate);
+
+async function searchPlaceIds(event) {
+  event.preventDefault();
+  if (placeSearchLoading) return;
+
+  const query = document.getElementById('placeFinderInput').value.trim()
+    || document.getElementById('dashboardPlaceNameInput').value.trim();
+  if (!query) {
+    showToast('상호명과 지역을 입력해주세요.');
+    return;
+  }
+
+  placeSearchLoading = true;
+  placeSearchError = '';
+  placeSearchResults = [];
+  renderPlaceFinderResults();
+  const button = document.getElementById('placeFinderBtn');
+  button.disabled = true;
+  button.textContent = '검색 중';
+
+  try {
+    const response = await fetch(`/places/search?q=${encodeURIComponent(query)}&limit=5`);
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(payload.detail || 'place_search_failed');
+    }
+    placeSearchResults = Array.isArray(payload.results) ? payload.results : [];
+    if (!placeSearchResults.length) {
+      placeSearchError = '검색 결과가 없습니다.';
+    }
+  } catch (error) {
+    placeSearchError = '플레이스 ID 검색에 실패했습니다.';
+  } finally {
+    placeSearchLoading = false;
+    button.disabled = false;
+    button.textContent = 'ID 찾기';
+    renderPlaceFinderResults();
+  }
+}
+
+function selectPlaceCandidate(event) {
+  const row = event.target.closest('[data-place-id]');
+  if (!row) return;
+
+  const placeId = row.dataset.placeId || '';
+  const candidate = placeSearchResults.find(item => String(item.place_id || '') === placeId);
+  if (!candidate || !candidate.place_id) return;
+
+  document.getElementById('dashboardPlaceNameInput').value = candidate.place_name
+    || document.getElementById('dashboardPlaceNameInput').value
+    || document.getElementById('placeFinderInput').value.trim();
+  document.getElementById('dashboardPlaceIdInput').value = candidate.place_id;
+  showToast('플레이스 ID를 입력했습니다.');
+}
+
+function renderPlaceFinderResults() {
+  if (!placeFinderResults) return;
+  if (placeSearchLoading) {
+    placeFinderResults.innerHTML = '<div class="finder-message">검색 중입니다.</div>';
+    return;
+  }
+  if (placeSearchError) {
+    placeFinderResults.innerHTML = `<div class="finder-message">${escapeHtml(placeSearchError)}</div>`;
+    return;
+  }
+  if (!placeSearchResults.length) {
+    placeFinderResults.innerHTML = '';
+    return;
+  }
+
+  placeFinderResults.innerHTML = placeSearchResults.map(item => {
+    const meta = [item.category, item.address, item.distance].filter(Boolean).join(' · ');
+    const placeId = String(item.place_id || '');
+    const attrs = placeId ? `data-place-id="${escapeHtml(placeId)}"` : '';
+    return `
+      <button type="button" class="finder-row" ${attrs}>
+        <span class="finder-main">
+          <span class="finder-name">${escapeHtml(item.place_name || '-')}</span>
+          <span class="finder-meta">${escapeHtml(meta || '상세 정보 없음')}</span>
+        </span>
+        <span class="finder-id">${escapeHtml(placeId || 'ID 없음')}</span>
+      </button>
+    `;
+  }).join('');
+}
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
 }
 
 function showToast(message) {
