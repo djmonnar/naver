@@ -17,6 +17,8 @@ from firebase_config import get_admin_app, get_data_backend, get_web_config, use
 app = FastAPI(title="네이버 플레이스 순위 트래커 + 연해주 예약")
 templates = Jinja2Templates(directory="templates")
 scheduler = AsyncIOScheduler(timezone="Asia/Seoul")
+APP_VERSION = "fast-name-match-20260708"
+RUNNING_RANK_CHECKS: set[str] = set()
 
 # CORS (예약 페이지용)
 app.add_middleware(
@@ -115,6 +117,8 @@ async def server_status():
 
     return {
         "status": "ok",
+        "version": APP_VERSION,
+        "running_rank_checks": len(RUNNING_RANK_CHECKS),
         "data_backend": get_data_backend(),
         "uses_firestore": uses_firestore(),
         "auth_enabled": auth.auth_enabled(),
@@ -350,12 +354,21 @@ async def check_now(request: Request, background_tasks: BackgroundTasks):
 
 
 async def _run_rank_check_job(user_id: str) -> None:
-    await database.set_check_status(
-        user_id,
-        "running",
-        "Render 서버에서 순위 체크 중입니다.",
-    )
+    if user_id in RUNNING_RANK_CHECKS:
+        await database.set_check_status(
+            user_id,
+            "running",
+            "이미 순위 체크가 진행 중입니다.",
+        )
+        return
+
+    RUNNING_RANK_CHECKS.add(user_id)
     try:
+        await database.set_check_status(
+            user_id,
+            "running",
+            "Render 서버에서 순위 체크 중입니다.",
+        )
         summary = await crawler.run_daily_check(user_id)
     except Exception as exc:
         await database.set_check_status(
@@ -365,6 +378,8 @@ async def _run_rank_check_job(user_id: str) -> None:
             {"error": str(exc)[:500]},
         )
         raise
+    finally:
+        RUNNING_RANK_CHECKS.discard(user_id)
 
     rankings_saved = int((summary or {}).get("rankings_saved") or 0)
     if rankings_saved > 0:
@@ -406,6 +421,13 @@ async def api_check_now(request: Request, background_tasks: BackgroundTasks):
         user.get("name"),
         user.get("photo_url"),
     )
+    if user["uid"] in RUNNING_RANK_CHECKS:
+        return JSONResponse({
+            "status": "running",
+            "message": "이미 Render 서버에서 순위 체크가 진행 중입니다.",
+            "data_backend": get_data_backend(),
+        })
+
     await database.set_check_status(
         user["uid"],
         "queued",

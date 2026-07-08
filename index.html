@@ -1060,6 +1060,10 @@
 
     async function runRenderCheck() {
       if (!state.user) return;
+      if (state.checkStatus?.state === "queued" || state.checkStatus?.state === "running") {
+        showToast("이미 순위 체크가 진행 중입니다.");
+        return;
+      }
 
       try {
         const savedPending = await savePendingInputs();
@@ -1092,14 +1096,16 @@
         if (!response.ok) {
           throw new Error(payload.detail || "check_failed");
         }
+        state.checkStatus = {
+          state: payload.status === "running" ? "running" : "queued",
+          message: payload.message || "Render 서버에서 순위 체크를 시작했습니다."
+        };
+        renderCheckStatus();
         showToast(payload.message || "Render 서버에서 순위 체크를 시작했습니다.");
       } catch (error) {
         showToast(renderCheckMessage(error));
       } finally {
-        buttons.forEach((button, index) => {
-          button.disabled = false;
-          button.textContent = index === 0 ? "지금 체크" : "Render 서버로 체크";
-        });
+        updateCheckButtons();
       }
     }
 
@@ -1328,6 +1334,7 @@
 
     function renderCheckStatus() {
       const status = state.checkStatus;
+      updateCheckButtons();
       if (status?.state === "queued") {
         $("checkStatusText").textContent = "체크 요청됨";
         return;
@@ -1360,6 +1367,15 @@
       } else {
         $("checkStatusText").textContent = "플레이스와 키워드 저장 대기";
       }
+    }
+
+    function updateCheckButtons() {
+      const isChecking = state.checkStatus?.state === "queued" || state.checkStatus?.state === "running";
+      const labels = isChecking ? ["체크 중", "체크 중"] : ["지금 체크", "Render 서버로 체크"];
+      [$("checkBtn"), $("checkBtnSecondary")].forEach((button, index) => {
+        button.disabled = isChecking;
+        button.textContent = labels[index];
+      });
     }
 
     function syncSelection() {
@@ -1477,7 +1493,7 @@
       const numeric = Number(rank);
       if (numeric > 0) return `${numeric}위`;
       if (numeric === 0) return "상세 확인 중";
-      return "100위 밖";
+      return "TOP30 밖";
     }
 
     function normalizePlaceName(name) {
