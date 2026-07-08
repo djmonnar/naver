@@ -275,6 +275,59 @@ async def set_check_status(
         return
 
 
+async def consume_manual_check_quota(user_id: str | None, date: str, limit: int) -> dict:
+    owner_uid = _user_id(user_id)
+    safe_limit = max(0, int(limit or 0))
+    if safe_limit <= 0:
+        return {"allowed": True, "count": 0, "remaining": None, "date": date, "limit": safe_limit}
+
+    if uses_firestore():
+        def _consume_sync():
+            from firebase_admin import firestore
+
+            db = _firestore()
+            ref = _user_doc(owner_uid)
+            transaction = db.transaction()
+
+            @firestore.transactional
+            def _consume(transaction):
+                snapshot = ref.get(transaction=transaction)
+                data = snapshot.to_dict() or {}
+                usage = data.get("manual_check_usage") or {}
+                current_count = int(usage.get("count") or 0) if usage.get("date") == date else 0
+                if current_count >= safe_limit:
+                    return {
+                        "allowed": False,
+                        "count": current_count,
+                        "remaining": 0,
+                        "date": date,
+                        "limit": safe_limit,
+                    }
+
+                next_count = current_count + 1
+                transaction.set(ref, {
+                    "manual_check_usage": {
+                        "date": date,
+                        "count": next_count,
+                        "limit": safe_limit,
+                        "updated_at": _now_text(),
+                    }
+                }, merge=True)
+                return {
+                    "allowed": True,
+                    "count": next_count,
+                    "remaining": max(safe_limit - next_count, 0),
+                    "date": date,
+                    "limit": safe_limit,
+                }
+
+            return _consume(transaction)
+
+        return await asyncio.to_thread(_consume_sync)
+
+    return {"allowed": True, "count": 0, "remaining": None, "date": date, "limit": safe_limit}
+
+
 async def list_user_ids() -> list[str]:
     if uses_firestore():
         def _list_sync():

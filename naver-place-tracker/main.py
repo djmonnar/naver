@@ -7,6 +7,7 @@ from apscheduler.triggers.cron import CronTrigger
 from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 import asyncio, sqlite3, os
 
 import auth
@@ -17,9 +18,13 @@ from firebase_config import get_admin_app, get_data_backend, get_web_config, use
 app = FastAPI(title="네이버 플레이스 순위 트래커 + 연해주 예약")
 templates = Jinja2Templates(directory="templates")
 scheduler = AsyncIOScheduler(timezone="Asia/Seoul")
-APP_VERSION = "clean-place-name-rank-match-20260708"
+APP_VERSION = "rank-check-global-queue-20260708"
 ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "djmonnar4@gmail.com").strip().lower()
+MANUAL_CHECK_LIMIT_PER_DAY = int(os.environ.get("MANUAL_CHECK_LIMIT_PER_DAY", "3"))
 RUNNING_RANK_CHECKS: set[str] = set()
+QUEUED_RANK_CHECK_USERS: set[str] = set()
+RANK_CHECK_QUEUE: asyncio.Queue | None = None
+RANK_CHECK_WORKER_TASK: asyncio.Task | None = None
 
 # CORS (예약 페이지용)
 app.add_middleware(
@@ -120,6 +125,8 @@ async def server_status():
         "status": "ok",
         "version": APP_VERSION,
         "running_rank_checks": len(RUNNING_RANK_CHECKS),
+        "queued_rank_checks": len(QUEUED_RANK_CHECK_USERS),
+        "manual_check_limit_per_day": MANUAL_CHECK_LIMIT_PER_DAY,
         "data_backend": get_data_backend(),
         "uses_firestore": uses_firestore(),
         "auth_enabled": auth.auth_enabled(),
@@ -156,6 +163,103 @@ async def _require_member_profile(user: dict) -> None:
     profile = await asyncio.to_thread(_get_profile_sync)
     if not _profile_complete(profile):
         raise HTTPException(status_code=403, detail="member_profile_required")
+
+
+def _today_kst() -> str:
+    return datetime.now(ZoneInfo("Asia/Seoul")).strftime("%Y-%m-%d")
+
+
+def _rank_check_queue() -> asyncio.Queue:
+    global RANK_CHECK_QUEUE
+    if RANK_CHECK_QUEUE is None:
+        RANK_CHECK_QUEUE = asyncio.Queue()
+    return RANK_CHECK_QUEUE
+
+
+def _ensure_rank_check_worker() -> None:
+    global RANK_CHECK_WORKER_TASK
+    if RANK_CHECK_WORKER_TASK is None or RANK_CHECK_WORKER_TASK.done():
+        RANK_CHECK_WORKER_TASK = asyncio.create_task(_rank_check_worker())
+
+
+async def _rank_check_worker() -> None:
+    queue = _rank_check_queue()
+    while True:
+        item = await queue.get()
+        user_id = str(item.get("user_id") or "")
+        source = str(item.get("source") or "manual")
+        if user_id:
+            QUEUED_RANK_CHECK_USERS.discard(user_id)
+        try:
+            if user_id:
+                await _run_rank_check_job(user_id, source)
+        except Exception as exc:
+            print(f"순위 체크 워커 오류 [{user_id}]: {exc}")
+        finally:
+            queue.task_done()
+
+
+async def _enqueue_rank_check(user_id: str, source: str = "manual") -> dict:
+    queue = _rank_check_queue()
+    _ensure_rank_check_worker()
+
+    if user_id in RUNNING_RANK_CHECKS:
+        message = "이미 Render 서버에서 순위 체크가 진행 중입니다."
+        await database.set_check_status(user_id, "running", message, {"source": source})
+        return {"status": "running", "message": message, "queue_position": 0}
+
+    if user_id in QUEUED_RANK_CHECK_USERS:
+        message = "이미 순위 체크 대기열에 등록되어 있습니다."
+        await database.set_check_status(user_id, "queued", message, {"source": source})
+        return {"status": "queued", "message": message, "queue_position": None}
+
+    position = queue.qsize() + len(RUNNING_RANK_CHECKS) + 1
+    message = (
+        f"순위 체크 대기열에 등록되었습니다. 예상 순번: {position}번째"
+        if source == "manual"
+        else f"자동 순위 체크 대기열에 등록되었습니다. 예상 순번: {position}번째"
+    )
+    QUEUED_RANK_CHECK_USERS.add(user_id)
+    await database.set_check_status(
+        user_id,
+        "queued",
+        message,
+        {"queue_position": position, "source": source},
+    )
+    await queue.put({"user_id": user_id, "source": source})
+    return {"status": "queued", "message": message, "queue_position": position}
+
+
+async def _enqueue_daily_rank_checks() -> None:
+    user_ids = await database.list_user_ids()
+    if not user_ids:
+        print("자동 순위 체크: 등록된 사용자 없음")
+        return
+
+    enqueued = 0
+    for user_id in user_ids:
+        if user_id in RUNNING_RANK_CHECKS or user_id in QUEUED_RANK_CHECK_USERS:
+            continue
+        await _enqueue_rank_check(user_id, "scheduled")
+        enqueued += 1
+    print(f"자동 순위 체크: {enqueued}/{len(user_ids)}명 대기열 등록")
+
+
+async def _consume_manual_check_quota_or_raise(user_id: str) -> dict:
+    usage = await database.consume_manual_check_quota(
+        user_id,
+        _today_kst(),
+        MANUAL_CHECK_LIMIT_PER_DAY,
+    )
+    if not usage.get("allowed"):
+        raise HTTPException(
+            status_code=429,
+            detail=(
+                f"오늘 수동 체크 횟수 {usage.get('limit', MANUAL_CHECK_LIMIT_PER_DAY)}회를 모두 사용했습니다. "
+                "내일 다시 실행해주세요."
+            ),
+        )
+    return usage
 
 
 @app.get("/api/admin/users")
@@ -249,7 +353,8 @@ async def startup():
     await database.init_db()
     init_res_db()
     init_gmail_log_db()  # Gmail 로그 테이블 초기화
-    scheduler.add_job(crawler.run_daily_check, CronTrigger(hour=9, minute=0, timezone="Asia/Seoul"), id="daily_check", replace_existing=True)
+    _ensure_rank_check_worker()
+    scheduler.add_job(_enqueue_daily_rank_checks, CronTrigger(hour=9, minute=0, timezone="Asia/Seoul"), id="daily_check", replace_existing=True)
     scheduler.add_job(keep_alive, "interval", minutes=14, id="keep_alive", replace_existing=True)
     # 네이버 Gmail 동기화: 10분마다
     scheduler.add_job(sync_naver_gmail, "interval", minutes=10, id="gmail_sync", replace_existing=True)
@@ -263,6 +368,8 @@ async def startup():
 @app.on_event("shutdown")
 async def shutdown():
     scheduler.shutdown()
+    if RANK_CHECK_WORKER_TASK and not RANK_CHECK_WORKER_TASK.done():
+        RANK_CHECK_WORKER_TASK.cancel()
 
 
 @app.get("/login", response_class=HTMLResponse)
@@ -521,12 +628,24 @@ async def del_keyword(request: Request, keyword: str = Form(...), place_id: str 
     return RedirectResponse(f"/{suffix}", status_code=303)
 
 @app.post("/check/now")
-async def check_now(request: Request, background_tasks: BackgroundTasks):
-    background_tasks.add_task(crawler.run_daily_check, auth.get_request_user(request)["uid"])
-    return JSONResponse({"status": "started", "message": "순위 체크를 시작했습니다."})
+async def check_now(request: Request):
+    request_user = auth.get_request_user(request)
+    user_id = request_user["uid"]
+    if (
+        not _is_admin_user(request_user)
+        and user_id not in RUNNING_RANK_CHECKS
+        and user_id not in QUEUED_RANK_CHECK_USERS
+    ):
+        await _consume_manual_check_quota_or_raise(user_id)
+    result = await _enqueue_rank_check(user_id, "manual")
+    return JSONResponse({
+        **result,
+        "data_backend": get_data_backend(),
+        "manual_check_limit_per_day": MANUAL_CHECK_LIMIT_PER_DAY,
+    })
 
 
-async def _run_rank_check_job(user_id: str) -> None:
+async def _run_rank_check_job(user_id: str, source: str = "manual") -> None:
     if user_id in RUNNING_RANK_CHECKS:
         await database.set_check_status(
             user_id,
@@ -541,6 +660,7 @@ async def _run_rank_check_job(user_id: str) -> None:
             user_id,
             "running",
             "Render 서버에서 순위 체크 중입니다.",
+            {"source": source},
         )
         summary = await crawler.run_daily_check(user_id)
     except Exception as exc:
@@ -566,12 +686,12 @@ async def _run_rank_check_job(user_id: str) -> None:
         user_id,
         state,
         message,
-        summary or {},
+        {"source": source, **(summary or {})},
     )
 
 
 @app.post("/api/check/now")
-async def api_check_now(request: Request, background_tasks: BackgroundTasks):
+async def api_check_now(request: Request):
     try:
         user = await auth.authenticate_bearer_request(request, raise_config_errors=True)
     except RuntimeError as exc:
@@ -595,23 +715,18 @@ async def api_check_now(request: Request, background_tasks: BackgroundTasks):
         user.get("name"),
         user.get("photo_url"),
     )
-    if user["uid"] in RUNNING_RANK_CHECKS:
-        return JSONResponse({
-            "status": "running",
-            "message": "이미 Render 서버에서 순위 체크가 진행 중입니다.",
-            "data_backend": get_data_backend(),
-        })
+    if (
+        not _is_admin_user(user)
+        and user["uid"] not in RUNNING_RANK_CHECKS
+        and user["uid"] not in QUEUED_RANK_CHECK_USERS
+    ):
+        await _consume_manual_check_quota_or_raise(user["uid"])
 
-    await database.set_check_status(
-        user["uid"],
-        "queued",
-        "Render 서버에 순위 체크를 요청했습니다.",
-    )
-    background_tasks.add_task(_run_rank_check_job, user["uid"])
+    result = await _enqueue_rank_check(user["uid"], "manual")
     return JSONResponse({
-        "status": "started",
-        "message": "Render 서버에서 순위 체크를 시작했습니다.",
+        **result,
         "data_backend": get_data_backend(),
+        "manual_check_limit_per_day": MANUAL_CHECK_LIMIT_PER_DAY,
     })
 
 

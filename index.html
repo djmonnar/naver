@@ -1021,7 +1021,7 @@
       appId: "1:111852664498:web:0b3329708e9fc1961f3bab"
     };
     const CHECK_API_BASE_URL = "https://naver-0zwy.onrender.com";
-    const CHECK_STALE_MS = 2 * 60 * 1000;
+    const CHECK_STALE_MS = 2 * 60 * 60 * 1000;
     const ADMIN_EMAIL = "djmonnar4@gmail.com";
 
     const app = initializeApp(firebaseConfig);
@@ -1853,11 +1853,11 @@
         return;
       }
       if (status?.state === "queued") {
-        $("checkStatusText").textContent = "체크 요청됨";
+        $("checkStatusText").textContent = status.message || "체크 요청됨";
         return;
       }
       if (status?.state === "running") {
-        $("checkStatusText").textContent = "Render 서버에서 체크 중";
+        $("checkStatusText").textContent = status.message || "Render 서버에서 체크 중";
         return;
       }
       if (status?.state === "done") {
@@ -2190,6 +2190,9 @@
       }
       if (text.includes("member_profile_required")) {
         return "회원 정보를 먼저 저장해주세요.";
+      }
+      if (text.includes("수동 체크 횟수") || text.includes("내일 다시 실행")) {
+        return text;
       }
       return fallback;
     }
