@@ -17,9 +17,11 @@ from firebase_config import get_admin_app, get_data_backend, get_web_config, use
 app = FastAPI(title="네이버 플레이스 순위 트래커")
 templates = Jinja2Templates(directory="templates")
 scheduler = AsyncIOScheduler(timezone="Asia/Seoul")
-APP_VERSION = "tracker-reliability-20260708"
+APP_VERSION = "inactive-user-skip-20260708"
 ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "djmonnar4@gmail.com").strip().lower()
 MANUAL_CHECK_LIMIT_PER_DAY = int(os.environ.get("MANUAL_CHECK_LIMIT_PER_DAY", "3"))
+# 이 일수 이상 로그인하지 않은 사용자는 매일 자동 체크에서 제외 (수동 체크는 가능)
+AUTO_CHECK_INACTIVE_DAYS = int(os.environ.get("AUTO_CHECK_INACTIVE_DAYS", "10"))
 RUNNING_RANK_CHECKS: set[str] = set()
 QUEUED_RANK_CHECK_USERS: set[str] = set()
 RANK_CHECK_QUEUE: asyncio.Queue | None = None
@@ -75,6 +77,7 @@ async def server_status():
         "running_rank_checks": len(RUNNING_RANK_CHECKS),
         "queued_rank_checks": len(QUEUED_RANK_CHECK_USERS),
         "manual_check_limit_per_day": MANUAL_CHECK_LIMIT_PER_DAY,
+        "auto_check_inactive_days": AUTO_CHECK_INACTIVE_DAYS,
         "data_backend": get_data_backend(),
         "uses_firestore": uses_firestore(),
         "auth_enabled": auth.auth_enabled(),
@@ -179,18 +182,20 @@ async def _enqueue_rank_check(user_id: str, source: str = "manual") -> dict:
 
 
 async def _enqueue_daily_rank_checks() -> None:
-    user_ids = await database.list_user_ids()
-    if not user_ids:
-        print("자동 순위 체크: 등록된 사용자 없음")
+    active_ids, inactive_ids = await database.list_active_user_ids(AUTO_CHECK_INACTIVE_DAYS)
+    if inactive_ids:
+        print(f"자동 순위 체크: {AUTO_CHECK_INACTIVE_DAYS}일 이상 미로그인 {len(inactive_ids)}명 제외")
+    if not active_ids:
+        print("자동 순위 체크: 대상 사용자 없음")
         return
 
     enqueued = 0
-    for user_id in user_ids:
+    for user_id in active_ids:
         if user_id in RUNNING_RANK_CHECKS or user_id in QUEUED_RANK_CHECK_USERS:
             continue
         await _enqueue_rank_check(user_id, "scheduled")
         enqueued += 1
-    print(f"자동 순위 체크: {enqueued}/{len(user_ids)}명 대기열 등록")
+    print(f"자동 순위 체크: {enqueued}/{len(active_ids)}명 대기열 등록")
 
 
 async def _consume_manual_check_quota_or_raise(user_id: str) -> dict:

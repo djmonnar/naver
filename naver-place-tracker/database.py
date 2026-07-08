@@ -232,8 +232,11 @@ def _ensure_firestore_user_sync(
     email: str | None = None,
     name: str | None = None,
     photo_url: str | None = None,
+    record_login: bool = False,
 ) -> None:
     data = {"updated_at": _now_text()}
+    if record_login:
+        data["last_login_at"] = _now_text()
     if email:
         data["email"] = email
     if name:
@@ -251,7 +254,11 @@ async def ensure_user(
 ) -> None:
     owner_uid = _user_id(user_id)
     if uses_firestore():
-        await asyncio.to_thread(_ensure_firestore_user_sync, owner_uid, email, name, photo_url)
+        # ensure_user는 로그인/수동 체크 등 사용자 직접 행동에서만 호출되므로
+        # 활동 시각(last_login_at)도 함께 갱신한다.
+        await asyncio.to_thread(
+            _ensure_firestore_user_sync, owner_uid, email, name, photo_url, True
+        )
 
 
 async def set_check_status(
@@ -357,6 +364,32 @@ async def consume_manual_check_quota(user_id: str | None, date: str, limit: int)
         return await asyncio.to_thread(_consume_sync)
 
     return {"allowed": True, "count": 0, "remaining": None, "date": date, "limit": safe_limit}
+
+
+async def list_active_user_ids(inactive_days: int) -> tuple[list[str], list[str]]:
+    """최근 inactive_days일 안에 로그인한 사용자만 반환. (active, inactive) 튜플.
+
+    last_login_at 기준 — updated_at은 자동 체크 자체가 갱신하므로 쓰지 않는다.
+    한 번도 로그인 기록이 없는 계정은 inactive로 분류한다 (다시 로그인하면 복귀).
+    """
+    if not uses_firestore():
+        return await list_user_ids(), []
+
+    cutoff = (datetime.now(KST) - timedelta(days=max(1, inactive_days))).strftime("%Y-%m-%d %H:%M:%S")
+
+    def _list_sync():
+        active: list[str] = []
+        inactive: list[str] = []
+        for doc in _firestore().collection("users").stream():
+            data = doc.to_dict() or {}
+            last_login = str(data.get("last_login_at") or "")
+            if last_login >= cutoff:
+                active.append(doc.id)
+            else:
+                inactive.append(doc.id)
+        return active, inactive
+
+    return await asyncio.to_thread(_list_sync)
 
 
 async def list_user_ids() -> list[str]:
