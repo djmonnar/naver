@@ -91,6 +91,30 @@
 
 3. **Save Changes**
 
+### 2-4-1. Firebase 로그인/Firestore 사용
+Firebase 프로젝트를 만든 뒤 아래 설정을 추가하면 계정별 데이터 저장으로 전환됩니다.
+
+1. Firebase 콘솔 → **Authentication** → **Sign-in method**에서 **Email/Password** 활성화
+2. Firebase 콘솔 → **Firestore Database** 생성
+3. Firebase 콘솔 → 프로젝트 설정 → **웹 앱** 추가 후 SDK 설정값 복사
+4. Firebase 콘솔 → 프로젝트 설정 → **서비스 계정** → 새 비공개 키 생성
+5. Render 환경변수에 추가:
+
+| Key | Value |
+|-----|-------|
+| DATA_BACKEND | firestore |
+| FIREBASE_AUTH_ENABLED | true |
+| FIREBASE_API_KEY | 웹 앱 설정의 apiKey |
+| FIREBASE_AUTH_DOMAIN | 웹 앱 설정의 authDomain |
+| FIREBASE_PROJECT_ID | 웹 앱 설정의 projectId |
+| FIREBASE_STORAGE_BUCKET | 웹 앱 설정의 storageBucket |
+| FIREBASE_MESSAGING_SENDER_ID | 웹 앱 설정의 messagingSenderId |
+| FIREBASE_APP_ID | 웹 앱 설정의 appId |
+| FIREBASE_SERVICE_ACCOUNT_JSON | 서비스 계정 JSON 전체 |
+| SESSION_COOKIE_SECURE | true |
+
+Firestore 규칙을 직접 설정할 때는 `firestore.rules.example`을 기준으로 사용자 `uid`별 접근만 허용하세요.
+
 ### 2-5. 접속 확인
 - 상단에 `https://place-tracker-xxxx.onrender.com` 형태의 URL 생성
 - 클릭해서 대시보드가 뜨면 배포 성공! 🎉

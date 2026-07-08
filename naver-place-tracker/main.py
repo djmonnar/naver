@@ -6,11 +6,13 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from pydantic import BaseModel
 from typing import Optional
-from datetime import datetime
+from datetime import datetime, timedelta
 import asyncio, sqlite3, os
 
+import auth
 import database
 import crawler
+from firebase_config import get_web_config, web_config_ready
 
 app = FastAPI(title="네이버 플레이스 순위 트래커 + 연해주 예약")
 templates = Jinja2Templates(directory="templates")
@@ -24,10 +26,23 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.middleware("http")
+async def firebase_auth_middleware(request: Request, call_next):
+    if auth.path_requires_auth(request.url.path):
+        user = await auth.authenticate_request(request)
+        if user is None:
+            return auth.unauthenticated_response(request)
+        request.state.user = user
+    else:
+        request.state.user = auth.local_user()
+
+    return await call_next(request)
+
 # ═══════════════════════════════════════════════
 #  연해주 예약 DB  (Render Disk 마운트 경로)
 # ═══════════════════════════════════════════════
-RES_DB = "/app/data/reservations.db"
+RES_DB = os.environ.get("RES_DB", "/app/data/reservations.db")
 
 def get_res_db():
     conn = sqlite3.connect(RES_DB)
@@ -35,7 +50,7 @@ def get_res_db():
     return conn
 
 def init_res_db():
-    os.makedirs(os.path.dirname(RES_DB), exist_ok=True)
+    os.makedirs(os.path.dirname(RES_DB), exist_ok=True) if os.path.dirname(RES_DB) else None
     conn = get_res_db()
     conn.execute("""
         CREATE TABLE IF NOT EXISTS reservations (
@@ -64,6 +79,10 @@ class Reservation(BaseModel):
     cset: int = 0
     menu: str = ""
     note: str = ""
+
+
+class SessionLogin(BaseModel):
+    idToken: str
 
 # ═══════════════════════════════════════════════
 #  기존 네이버 트래커
@@ -102,63 +121,218 @@ async def startup():
 async def shutdown():
     scheduler.shutdown()
 
+
+@app.get("/login", response_class=HTMLResponse)
+async def login_page(request: Request, next: str = "/"):
+    if not auth.auth_enabled():
+        return RedirectResponse(next or "/", status_code=303)
+
+    current_user = await auth.authenticate_request(request)
+    if current_user:
+        return RedirectResponse(next or "/", status_code=303)
+
+    return templates.TemplateResponse("login.html", {
+        "request": request,
+        "firebase_config": get_web_config(),
+        "firebase_ready": web_config_ready(),
+        "next": next or "/",
+    })
+
+
+@app.post("/session/login")
+async def session_login(request: Request, payload: SessionLogin):
+    if not auth.auth_enabled():
+        return JSONResponse({"status": "auth_disabled"})
+
+    try:
+        session_cookie, decoded, expires_in = await auth.create_session_cookie(payload.idToken)
+    except Exception as exc:
+        raise HTTPException(status_code=401, detail="Invalid Firebase ID token") from exc
+
+    await database.ensure_user(decoded["uid"], decoded.get("email"))
+    response = JSONResponse({"status": "ok"})
+    auth.set_session_cookie(response, request, session_cookie, expires_in)
+    return response
+
+
+@app.post("/session/logout")
+async def session_logout(request: Request):
+    response = RedirectResponse("/login", status_code=303)
+    auth.clear_session_cookie(response, request)
+    return response
+
+
+@app.get("/session/logout")
+async def session_logout_get(request: Request):
+    response = RedirectResponse("/login", status_code=303)
+    auth.clear_session_cookie(response, request)
+    return response
+
+
+def _parse_date(value: str | None):
+    if not value:
+        return None
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").date()
+    except ValueError:
+        return None
+
+
+def _format_mmdd(value: str | None) -> str:
+    parsed = _parse_date(value)
+    return parsed.strftime("%m/%d") if parsed else "-"
+
+
+def _build_rank_summary(rows: list[dict]) -> dict:
+    valid = [row for row in rows if int(row.get("rank") or -1) > 0]
+    if not valid:
+        return {
+            "best_rank": "-",
+            "best_date": "-",
+            "worst_rank": "-",
+            "worst_date": "-",
+            "tracking_days": 0,
+        }
+
+    best = min(valid, key=lambda row: int(row["rank"]))
+    worst = max(valid, key=lambda row: int(row["rank"]))
+    dates = sorted(filter(None, (_parse_date(row.get("date")) for row in valid)))
+    tracking_days = (dates[-1] - dates[0]).days + 1 if len(dates) >= 2 else len(dates)
+    return {
+        "best_rank": f"{best['rank']}위",
+        "best_date": _format_mmdd(best.get("date")),
+        "worst_rank": f"{worst['rank']}위",
+        "worst_date": _format_mmdd(worst.get("date")),
+        "tracking_days": tracking_days,
+    }
+
+
+def _build_chart_points(rows: list[dict]) -> list[dict]:
+    points = []
+    seen = set()
+    for row in sorted(rows, key=lambda item: item.get("date", "")):
+        date_key = row.get("date")
+        if not date_key or date_key in seen:
+            continue
+        seen.add(date_key)
+        rank = int(row.get("rank") or -1)
+        points.append({
+            "date": date_key,
+            "rank": rank if rank > 0 else None,
+        })
+    return points
+
+
+def _fallback_top_results(latest: list[dict], keyword: str | None, selected_place_id: str | None) -> dict:
+    rows = [
+        row for row in latest
+        if row.get("keyword") == keyword and int(row.get("rank") or -1) > 0
+    ]
+    rows.sort(key=lambda row: int(row.get("rank") or 999))
+    latest_date = max((row.get("date") for row in rows if row.get("date")), default=None)
+    results = []
+    for row in rows[:30]:
+        results.append({
+            "rank": row.get("rank"),
+            "place_id": row.get("place_id") or "",
+            "place_name": row.get("place_name") or row.get("place_id") or "",
+            "is_target": row.get("place_id") == selected_place_id,
+        })
+    return {"date": latest_date, "results": results}
+
+
 @app.get("/", response_class=HTMLResponse)
-async def dashboard(request: Request):
-    places = await database.get_places()
-    keywords = await database.get_keywords()
-    latest = await database.get_latest_rankings()
-    rankings_30 = await database.get_rankings(days=30)
-    chart_data = {}
-    for row in rankings_30:
-        key = f"{row['place_name'] or row['place_id']} | {row['keyword']}"
-        if key not in chart_data:
-            chart_data[key] = {"dates": [], "ranks": [], "color": None}
-        if row['date'] not in chart_data[key]["dates"]:
-            chart_data[key]["dates"].append(row['date'])
-            chart_data[key]["ranks"].append(row['rank'] if row['rank'] > 0 else None)
+async def dashboard(
+    request: Request,
+    place_id: Optional[str] = None,
+    keyword: Optional[str] = None,
+):
+    user = auth.get_request_user(request)
+    user_id = user["uid"]
+    places = await database.get_places(user_id)
+    keywords = await database.get_keywords(user_id)
+    latest = await database.get_latest_rankings(user_id)
+
+    selected_place = next((row for row in places if row.get("place_id") == place_id), places[0] if places else None)
+    selected_keyword = keyword if any(row.get("keyword") == keyword for row in keywords) else (
+        keywords[0]["keyword"] if keywords else None
+    )
+    selected_place_id = selected_place.get("place_id") if selected_place else None
+
+    selected_rows = []
+    if selected_place_id and selected_keyword:
+        selected_rows = await database.get_rankings(
+            place_id=selected_place_id,
+            keyword=selected_keyword,
+            days=3650,
+            user_id=user_id,
+        )
+
+    summary = _build_rank_summary(selected_rows)
+    chart_points = _build_chart_points(selected_rows)
+
+    top_payload = {"date": None, "results": []}
+    if selected_keyword:
+        top_payload = await database.get_latest_keyword_results(selected_keyword, user_id=user_id, limit=30)
+        if not top_payload["results"]:
+            top_payload = _fallback_top_results(latest, selected_keyword, selected_place_id)
+        else:
+            for row in top_payload["results"]:
+                row["is_target"] = row.get("place_id") == selected_place_id
+
     return templates.TemplateResponse("dashboard.html", {
-        "request": request, "places": places, "keywords": keywords,
-        "latest": latest, "chart_data": chart_data,
+        "request": request,
+        "places": places,
+        "keywords": keywords,
+        "latest": latest,
+        "selected_place": selected_place,
+        "selected_keyword": selected_keyword,
+        "summary": summary,
+        "chart_points": chart_points,
+        "top_results": top_payload["results"],
+        "top_results_date": top_payload["date"],
+        "user": user, "auth_enabled": auth.auth_enabled(),
         "now": datetime.now().strftime("%Y-%m-%d %H:%M"),
     })
 
 @app.post("/places/add")
-async def add_place(place_id: str = Form(...), place_name: str = Form(...)):
+async def add_place(request: Request, place_id: str = Form(...), place_name: str = Form(...)):
     if place_id.strip():
-        await database.add_place(place_id.strip(), place_name.strip())
+        await database.add_place(place_id.strip(), place_name.strip(), auth.get_request_user(request)["uid"])
     return RedirectResponse("/", status_code=303)
 
 @app.post("/places/delete")
-async def del_place(place_id: str = Form(...)):
-    await database.delete_place(place_id)
+async def del_place(request: Request, place_id: str = Form(...)):
+    await database.delete_place(place_id, auth.get_request_user(request)["uid"])
     return RedirectResponse("/", status_code=303)
 
 @app.post("/keywords/add")
-async def add_keyword(keyword: str = Form(...)):
+async def add_keyword(request: Request, keyword: str = Form(...)):
     if keyword.strip():
-        await database.add_keyword(keyword.strip())
+        await database.add_keyword(keyword.strip(), auth.get_request_user(request)["uid"])
     return RedirectResponse("/", status_code=303)
 
 @app.post("/keywords/delete")
-async def del_keyword(keyword: str = Form(...)):
-    await database.delete_keyword(keyword)
+async def del_keyword(request: Request, keyword: str = Form(...)):
+    await database.delete_keyword(keyword, auth.get_request_user(request)["uid"])
     return RedirectResponse("/", status_code=303)
 
 @app.post("/check/now")
-async def check_now(background_tasks: BackgroundTasks):
-    background_tasks.add_task(crawler.run_daily_check)
+async def check_now(request: Request, background_tasks: BackgroundTasks):
+    background_tasks.add_task(crawler.run_daily_check, auth.get_request_user(request)["uid"])
     return JSONResponse({"status": "started", "message": "순위 체크를 시작했습니다."})
 
 @app.get("/check/status")
-async def check_status():
-    latest = await database.get_latest_rankings()
+async def check_status(request: Request):
+    latest = await database.get_latest_rankings(auth.get_request_user(request)["uid"])
     return JSONResponse({"latest": latest})
 
 @app.get("/report", response_class=HTMLResponse)
 async def report(request: Request):
-    places = await database.get_places()
-    keywords = await database.get_keywords()
-    rankings_30 = await database.get_rankings(days=30)
+    user_id = auth.get_request_user(request)["uid"]
+    places = await database.get_places(user_id)
+    keywords = await database.get_keywords(user_id)
+    rankings_30 = await database.get_rankings(days=30, user_id=user_id)
     today = datetime.now().strftime("%Y년 %m월 %d일")
     chart_labels_set = sorted(set(r['date'] for r in rankings_30))
     chart_datasets = []
@@ -202,8 +376,13 @@ async def report(request: Request):
     })
 
 @app.get("/api/rankings")
-async def api_rankings(place_id: str = None, keyword: str = None, days: int = 30):
-    return JSONResponse(await database.get_rankings(place_id=place_id, keyword=keyword, days=days))
+async def api_rankings(request: Request, place_id: str = None, keyword: str = None, days: int = 30):
+    return JSONResponse(await database.get_rankings(
+        place_id=place_id,
+        keyword=keyword,
+        days=days,
+        user_id=auth.get_request_user(request)["uid"],
+    ))
 
 # ═══════════════════════════════════════════════
 #  연해주 예약 페이지

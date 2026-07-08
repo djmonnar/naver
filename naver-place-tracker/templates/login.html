@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>로그인 | 플레이스 순위 트래커</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700;900&family=Space+Mono:wght@400;700&display=swap');
+
+  :root {
+    --bg: #0a0a0f;
+    --surface: #111118;
+    --surface2: #1a1a24;
+    --border: #2a2a3a;
+    --accent: #00e5a0;
+    --accent2: #7c6aff;
+    --accent3: #ff6b6b;
+    --text: #e8e8f0;
+    --text-dim: #8a8aa3;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    min-height: 100vh;
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Noto Sans KR', sans-serif;
+    display: grid;
+    place-items: center;
+    padding: 24px;
+  }
+
+  .shell {
+    width: min(100%, 420px);
+  }
+
+  .brand {
+    margin-bottom: 20px;
+  }
+
+  .brand h1 {
+    font-size: 24px;
+    font-weight: 800;
+    line-height: 1.25;
+  }
+
+  .brand span { color: var(--accent); }
+
+  .brand p {
+    color: var(--text-dim);
+    font-size: 13px;
+    margin-top: 8px;
+  }
+
+  .panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 22px;
+  }
+
+  .tabs {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin-bottom: 18px;
+  }
+
+  .tab {
+    border: 1px solid var(--border);
+    background: var(--surface2);
+    color: var(--text-dim);
+    border-radius: 8px;
+    padding: 10px 12px;
+    cursor: pointer;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 700;
+  }
+
+  .tab.active {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #000;
+  }
+
+  .field {
+    display: grid;
+    gap: 7px;
+    margin-bottom: 14px;
+  }
+
+  label {
+    color: var(--text-dim);
+    font-size: 12px;
+    font-weight: 700;
+  }
+
+  input {
+    width: 100%;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text);
+    font: inherit;
+    font-size: 14px;
+    outline: none;
+    padding: 12px 13px;
+  }
+
+  input:focus { border-color: var(--accent); }
+
+  .submit {
+    width: 100%;
+    border: 0;
+    border-radius: 8px;
+    background: linear-gradient(135deg, var(--accent2), var(--accent));
+    color: #fff;
+    cursor: pointer;
+    font: inherit;
+    font-size: 14px;
+    font-weight: 800;
+    padding: 13px 16px;
+    margin-top: 4px;
+  }
+
+  .submit:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+  }
+
+  .message {
+    min-height: 20px;
+    margin-top: 14px;
+    color: var(--text-dim);
+    font-size: 12px;
+    line-height: 1.55;
+  }
+
+  .message.error { color: var(--accent3); }
+  .message.ok { color: var(--accent); }
+
+  .setup {
+    border: 1px solid rgba(255,107,107,0.35);
+    background: rgba(255,107,107,0.08);
+    color: #ffb4b4;
+    border-radius: 8px;
+    font-size: 12px;
+    line-height: 1.6;
+    margin-bottom: 16px;
+    padding: 12px;
+  }
+
+  code {
+    color: #fff;
+    font-family: 'Space Mono', monospace;
+    font-size: 11px;
+  }
+</style>
+</head>
+<body>
+  <main class="shell">
+    <div class="brand">
+      <h1>플레이스 <span>순위 트래커</span></h1>
+      <p>로그인하면 등록한 플레이스, 키워드, 순위 기록이 계정별로 분리됩니다.</p>
+    </div>
+
+    <section class="panel">
+      {% if not firebase_ready %}
+      <div class="setup">
+        Firebase 웹 설정이 아직 없습니다.<br>
+        <code>FIREBASE_API_KEY</code>, <code>FIREBASE_AUTH_DOMAIN</code>, <code>FIREBASE_PROJECT_ID</code>, <code>FIREBASE_APP_ID</code> 값을 넣으면 로그인 화면이 활성화됩니다.
+      </div>
+      {% endif %}
+
+      <div class="tabs">
+        <button class="tab active" type="button" data-mode="login">로그인</button>
+        <button class="tab" type="button" data-mode="signup">회원가입</button>
+      </div>
+
+      <form id="authForm">
+        <div class="field">
+          <label for="email">이메일</label>
+          <input id="email" type="email" autocomplete="email" required>
+        </div>
+        <div class="field">
+          <label for="password">비밀번호</label>
+          <input id="password" type="password" autocomplete="current-password" minlength="6" required>
+        </div>
+        <button id="submitBtn" class="submit" type="submit" {% if not firebase_ready %}disabled{% endif %}>로그인</button>
+        <div id="message" class="message"></div>
+      </form>
+    </section>
+  </main>
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/12.15.0/firebase-app.js";
+import {
+  browserLocalPersistence,
+  createUserWithEmailAndPassword,
+  getAuth,
+  setPersistence,
+  signInWithEmailAndPassword
+} from "https://www.gstatic.com/firebasejs/12.15.0/firebase-auth.js";
+
+const firebaseReady = {{ firebase_ready | tojson }};
+const firebaseConfig = {{ firebase_config | tojson }};
+const nextUrl = {{ next | tojson }};
+const tabs = document.querySelectorAll('.tab');
+const form = document.getElementById('authForm');
+const submitBtn = document.getElementById('submitBtn');
+const message = document.getElementById('message');
+let mode = 'login';
+let auth = null;
+
+if (firebaseReady) {
+  const app = initializeApp(firebaseConfig);
+  auth = getAuth(app);
+  await setPersistence(auth, browserLocalPersistence);
+}
+
+tabs.forEach(tab => {
+  tab.addEventListener('click', () => {
+    mode = tab.dataset.mode;
+    tabs.forEach(item => item.classList.toggle('active', item === tab));
+    submitBtn.textContent = mode === 'login' ? '로그인' : '회원가입';
+    message.textContent = '';
+    message.className = 'message';
+  });
+});
+
+form.addEventListener('submit', async event => {
+  event.preventDefault();
+  if (!auth) return;
+
+  const email = document.getElementById('email').value.trim();
+  const password = document.getElementById('password').value;
+  submitBtn.disabled = true;
+  message.textContent = mode === 'login' ? '로그인 중입니다.' : '계정을 만드는 중입니다.';
+  message.className = 'message';
+
+  try {
+    const credential = mode === 'login'
+      ? await signInWithEmailAndPassword(auth, email, password)
+      : await createUserWithEmailAndPassword(auth, email, password);
+    const idToken = await credential.user.getIdToken();
+    const response = await fetch('/session/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ idToken })
+    });
+
+    if (!response.ok) throw new Error('session_failed');
+
+    message.textContent = '완료되었습니다.';
+    message.className = 'message ok';
+    window.location.href = nextUrl || '/';
+  } catch (error) {
+    const code = error.code || error.message || '';
+    if (code.includes('auth/invalid-credential') || code.includes('auth/wrong-password')) {
+      message.textContent = '이메일 또는 비밀번호가 맞지 않습니다.';
+    } else if (code.includes('auth/email-already-in-use')) {
+      message.textContent = '이미 가입된 이메일입니다.';
+    } else if (code.includes('auth/weak-password')) {
+      message.textContent = '비밀번호는 6자 이상이어야 합니다.';
+    } else if (code.includes('auth/operation-not-allowed')) {
+      message.textContent = 'Firebase 콘솔에서 이메일/비밀번호 로그인을 활성화해주세요.';
+    } else {
+      message.textContent = '처리 중 오류가 발생했습니다.';
+    }
+    message.className = 'message error';
+  } finally {
+    submitBtn.disabled = !firebaseReady;
+  }
+});
+</script>
+</body>
+</html>
