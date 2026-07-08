@@ -18,7 +18,7 @@ from firebase_config import get_admin_app, get_data_backend, get_web_config, use
 app = FastAPI(title="네이버 플레이스 순위 트래커")
 templates = Jinja2Templates(directory="templates")
 scheduler = AsyncIOScheduler(timezone="Asia/Seoul")
-APP_VERSION = "skip-already-checked-20260708"
+APP_VERSION = "crawl-time-budget-20260708"
 ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "djmonnar4@gmail.com").strip().lower()
 MANUAL_CHECK_LIMIT_PER_DAY = int(os.environ.get("MANUAL_CHECK_LIMIT_PER_DAY", "3"))
 # 이 일수 이상 로그인하지 않은 사용자는 매일 자동 체크에서 제외 (수동 체크는 가능)

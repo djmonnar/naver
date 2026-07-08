@@ -1,5 +1,7 @@
 import asyncio
+import os
 import random
+import time
 import urllib.parse
 import re
 import json
@@ -9,6 +11,26 @@ from playwright.async_api import async_playwright
 import database
 
 KST = ZoneInfo("Asia/Seoul")
+
+# 한 키워드의 목록 수집에 쓸 최대 시간(초). 이 시간이 지나면 그때까지 모은 결과를 사용한다.
+# Render 무료 플랜에서 무한정 스크롤하다 타임아웃/메모리 초과로 실패하는 것을 방지.
+COLLECT_BUDGET_SECONDS = int(os.environ.get("RANK_COLLECT_BUDGET_SECONDS", "40"))
+# search_keyword_results 전체(브라우저 기동 포함)에 대한 안전 타임아웃(초).
+KEYWORD_CRAWL_TIMEOUT = int(os.environ.get("RANK_KEYWORD_TIMEOUT_SECONDS", "80"))
+MAX_SCROLL_ITERATIONS = int(os.environ.get("RANK_MAX_SCROLL_ITERATIONS", "40"))
+
+# 크롬 실행 인자 — 자동화 탐지 회피 + Render 무료 플랜(512MB) 메모리 절약
+BROWSER_ARGS = [
+    "--no-sandbox",
+    "--disable-setuid-sandbox",
+    "--disable-blink-features=AutomationControlled",
+    "--disable-dev-shm-usage",
+    "--disable-gpu",
+    "--disable-extensions",
+    "--disable-background-networking",
+    "--renderer-process-limit=1",
+    "--disable-features=site-per-process,TranslateUI",
+]
 
 
 def _now_kst() -> datetime:
@@ -289,13 +311,19 @@ async def _collect_results_from_frame(frame, limit: int) -> list[dict]:
     stagnant = 0
     previous_count = 0
     previous_signature = ""
+    started = time.monotonic()
 
-    for _ in range(40):
+    for _ in range(MAX_SCROLL_ITERATIONS):
         content = await frame.content()
         _merge_results(results, _extract_json_results(content, limit), seen, limit)
         if len(results) < limit:
             _merge_results(results, await _extract_dom_results(frame, limit), seen, limit)
         if len(results) >= limit:
+            break
+
+        # 시간 예산 초과 시 그때까지 모은 결과로 종료 (무한 스크롤 방지)
+        if time.monotonic() - started >= COLLECT_BUDGET_SECONDS:
+            print(f"  ⏱️ 수집 시간 예산({COLLECT_BUDGET_SECONDS}s) 도달 — {len(results)}개로 종료")
             break
 
         try:
@@ -308,28 +336,19 @@ async def _collect_results_from_frame(frame, limit: int) -> list[dict]:
             stagnant += 1
         else:
             stagnant = 0
-        if stagnant >= 5 or not scroll_state.get("moved"):
+        if stagnant >= 4 or not scroll_state.get("moved"):
             break
 
         previous_count = len(results)
         previous_signature = signature
-        await asyncio.sleep(random.uniform(0.8, 1.4))
+        await asyncio.sleep(random.uniform(0.5, 0.9))
 
     return results
 
 
 async def search_keyword_results(keyword: str, limit: int = TOP_LIST_LIMIT) -> list[dict]:
     async with async_playwright() as p:
-        browser = await p.chromium.launch(
-            headless=True,
-            args=[
-                "--no-sandbox",
-                "--disable-setuid-sandbox",
-                "--disable-blink-features=AutomationControlled",
-                "--disable-dev-shm-usage",
-                "--disable-gpu",
-            ],
-        )
+        browser = await p.chromium.launch(headless=True, args=BROWSER_ARGS)
         context = await browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
             viewport={"width": 1280, "height": 900},
@@ -479,16 +498,7 @@ async def search_place_candidates(query: str, limit: int = 5) -> list[dict]:
         return []
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(
-            headless=True,
-            args=[
-                "--no-sandbox",
-                "--disable-setuid-sandbox",
-                "--disable-blink-features=AutomationControlled",
-                "--disable-dev-shm-usage",
-                "--disable-gpu",
-            ],
-        )
+        browser = await p.chromium.launch(headless=True, args=BROWSER_ARGS)
         context = await browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
             viewport={"width": 1280, "height": 900},
@@ -568,16 +578,7 @@ async def search_place_candidates(query: str, limit: int = 5) -> list[dict]:
 
 async def search_place_rank(keyword: str, target_place_id: str, target_place_name: str | None = None) -> int:
     async with async_playwright() as p:
-        browser = await p.chromium.launch(
-            headless=True,
-            args=[
-                "--no-sandbox",
-                "--disable-setuid-sandbox",
-                "--disable-blink-features=AutomationControlled",
-                "--disable-dev-shm-usage",
-                "--disable-gpu",
-            ]
-        )
+        browser = await p.chromium.launch(headless=True, args=BROWSER_ARGS)
         context = await browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
             viewport={"width": 1280, "height": 900},
@@ -759,7 +760,14 @@ async def run_daily_check(user_id: str | None = None):
                 {"current_keyword": keyword, "keyword_index": keyword_index, "keyword_total": total_keywords},
             )
 
-            keyword_results = await search_keyword_results(keyword, TOP_LIST_LIMIT)
+            try:
+                keyword_results = await asyncio.wait_for(
+                    search_keyword_results(keyword, TOP_LIST_LIMIT),
+                    timeout=KEYWORD_CRAWL_TIMEOUT,
+                )
+            except asyncio.TimeoutError:
+                keyword_results = []
+                print(f"  ⏱️ [{keyword}] 크롤 타임아웃({KEYWORD_CRAWL_TIMEOUT}s) — 건너뜀")
             if not keyword_results:
                 # 수집 0건 = 크롤링 실패로 간주 (네이버 구조 변경/차단 가능성).
                 # "순위 밖(-1)"으로 잘못 기록하지 않도록 이 키워드는 저장을 건너뜀.
