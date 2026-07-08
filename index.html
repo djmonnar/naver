@@ -499,6 +499,15 @@
     .primary-button.full { width: 100%; }
     .primary-button:disabled { opacity: 0.55; cursor: wait; }
 
+    .status-line {
+      min-height: 22px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 800;
+      line-height: 1.5;
+      margin: 0 0 10px;
+    }
+
     .delete-button {
       border: 1px solid var(--line);
       border-radius: 999px;
@@ -695,7 +704,7 @@
     <section class="card">
       <div class="card-head">
         <h2 class="card-title">현재 순위</h2>
-        <a class="primary-button" href="https://github.com/djmonnar/naver/actions/workflows/daily-rank-check.yml" target="_blank" rel="noreferrer">수동 실행</a>
+        <a class="primary-button" href="https://github.com/djmonnar/naver/actions/workflows/daily-rank-check.yml" target="_blank" rel="noreferrer">GitHub에서 체크 실행</a>
       </div>
       <div id="currentEmpty" class="empty-state hidden">현재 순위 기록이 없습니다.</div>
       <div id="currentRows" class="current-list"></div>
@@ -732,8 +741,9 @@
         </div>
 
         <div class="manage-panel">
-          <h3 class="panel-title">체크 상태</h3>
-          <a class="primary-button full" href="https://github.com/djmonnar/naver/actions" target="_blank" rel="noreferrer">Actions 열기</a>
+          <h3 class="panel-title">자동 체크</h3>
+          <p id="checkStatusText" class="status-line">플레이스와 키워드 저장 대기</p>
+          <a class="primary-button full" href="https://github.com/djmonnar/naver/actions/workflows/daily-rank-check.yml" target="_blank" rel="noreferrer">GitHub 실행 페이지</a>
         </div>
       </div>
     </section>
@@ -920,13 +930,17 @@
       const placeName = $("placeNameInput").value.trim();
       if (!placeId || !placeName) return;
 
-      await setDoc(doc(db, "users", state.user.uid, "places", placeId), {
-        place_id: placeId,
-        place_name: placeName,
-        created_at: nowText()
-      }, { merge: true });
-      event.target.reset();
-      showToast("플레이스를 추가했습니다.");
+      try {
+        await setDoc(doc(db, "users", state.user.uid, "places", placeId), {
+          place_id: placeId,
+          place_name: placeName,
+          created_at: nowText()
+        }, { merge: true });
+        event.target.reset();
+        showToast("플레이스를 저장했습니다.");
+      } catch (error) {
+        showToast(firebaseMessage(error));
+      }
     }
 
     async function addKeyword(event) {
@@ -935,12 +949,16 @@
       const keyword = $("keywordInput").value.trim();
       if (!keyword) return;
 
-      await setDoc(doc(db, "users", state.user.uid, "keywords", keywordDocId(keyword)), {
-        keyword,
-        created_at: nowText()
-      }, { merge: true });
-      event.target.reset();
-      showToast("키워드를 추가했습니다.");
+      try {
+        await setDoc(doc(db, "users", state.user.uid, "keywords", keywordDocId(keyword)), {
+          keyword,
+          created_at: nowText()
+        }, { merge: true });
+        event.target.reset();
+        showToast("키워드를 저장했습니다.");
+      } catch (error) {
+        showToast(firebaseMessage(error));
+      }
     }
 
     async function deletePlace(placeId) {
@@ -965,6 +983,7 @@
       renderCurrentRankings();
       renderManageLists();
       renderLastChecked();
+      renderCheckStatus();
     }
 
     function renderAccount() {
@@ -1169,6 +1188,20 @@
       $("lastChecked").textContent = latestDate ? `마지막 확인 ${latestDate}` : "마지막 확인 -";
     }
 
+    function renderCheckStatus() {
+      const hasPlaces = state.places.length > 0;
+      const hasKeywords = state.keywords.length > 0;
+      if (hasPlaces && hasKeywords) {
+        $("checkStatusText").textContent = "체크 실행 준비 완료";
+      } else if (hasPlaces) {
+        $("checkStatusText").textContent = "키워드 저장 대기";
+      } else if (hasKeywords) {
+        $("checkStatusText").textContent = "플레이스 저장 대기";
+      } else {
+        $("checkStatusText").textContent = "플레이스와 키워드 저장 대기";
+      }
+    }
+
     function syncSelection() {
       if (!state.places.some((place) => place.place_id === state.selectedPlaceId)) {
         state.selectedPlaceId = state.places[0]?.place_id || "";
@@ -1278,9 +1311,9 @@
 
     function firebaseMessage(error) {
       if (error?.code === "permission-denied") {
-        return "Firestore 권한을 확인해주세요.";
+        return "Firestore 규칙을 확인해주세요.";
       }
-      return "데이터를 불러오지 못했습니다.";
+      return "데이터 저장 또는 불러오기에 실패했습니다.";
     }
 
     function showToast(message) {
