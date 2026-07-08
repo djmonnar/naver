@@ -330,7 +330,14 @@ async def check_now(request: Request, background_tasks: BackgroundTasks):
 
 @app.post("/api/check/now")
 async def api_check_now(request: Request, background_tasks: BackgroundTasks):
-    user = await auth.authenticate_bearer_request(request)
+    try:
+        user = await auth.authenticate_bearer_request(request, raise_config_errors=True)
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Render Firebase Admin 환경변수를 확인해주세요.",
+        ) from exc
+
     if not user:
         raise HTTPException(status_code=401, detail="Firebase 로그인이 필요합니다.")
 

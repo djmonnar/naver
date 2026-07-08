@@ -1363,6 +1363,9 @@
       if (text.includes("Firebase 로그인이 필요합니다")) {
         return "로그인을 다시 확인해주세요.";
       }
+      if (text.includes("Render Firebase Admin")) {
+        return "Render 환경변수 FIREBASE_SERVICE_ACCOUNT_JSON을 확인해주세요.";
+      }
       return "순위 체크 요청에 실패했습니다.";
     }
 

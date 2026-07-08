@@ -57,17 +57,28 @@ def _user_from_decoded(decoded: dict) -> dict[str, str]:
     }
 
 
-async def authenticate_bearer_request(request: Request) -> dict[str, str] | None:
+async def authenticate_bearer_request(
+    request: Request,
+    *,
+    raise_config_errors: bool = False,
+) -> dict[str, str] | None:
     auth_header = request.headers.get("authorization", "")
     scheme, _, token = auth_header.partition(" ")
     if scheme.lower() != "bearer" or not token.strip():
         return None
 
     try:
+        app = get_admin_app()
+    except RuntimeError:
+        if raise_config_errors:
+            raise
+        return None
+
+    try:
         decoded = await asyncio.to_thread(
             _firebase_auth().verify_id_token,
             token.strip(),
-            app=get_admin_app(),
+            app=app,
         )
     except Exception:
         return None
