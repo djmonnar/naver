@@ -679,6 +679,36 @@ async def save_keyword_results(
         await db.commit()
 
 
+async def get_checked_pairs_for_date(user_id: str | None, date: str) -> set[tuple[str, str]]:
+    """해당 날짜에 이미 순위가 저장된 (place_id, keyword) 조합 집합을 반환."""
+    owner_uid = _user_id(user_id)
+    if uses_firestore():
+        def _get_sync():
+            pairs: set[tuple[str, str]] = set()
+            docs = (
+                _user_doc(owner_uid)
+                .collection("rankings")
+                .where("date", "==", date)
+                .stream()
+            )
+            for doc in docs:
+                row = doc.to_dict() or {}
+                place_id = str(row.get("place_id") or "")
+                keyword = str(row.get("keyword") or "")
+                if place_id and keyword:
+                    pairs.add((place_id, keyword))
+            return pairs
+
+        return await asyncio.to_thread(_get_sync)
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT DISTINCT place_id, keyword FROM rankings WHERE owner_uid = ? AND date = ?",
+            (owner_uid, date),
+        ) as cursor:
+            return {(str(row[0]), str(row[1])) for row in await cursor.fetchall()}
+
+
 async def get_rankings(
     place_id: str | None = None,
     keyword: str | None = None,

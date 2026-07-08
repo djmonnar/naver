@@ -18,7 +18,7 @@ from firebase_config import get_admin_app, get_data_backend, get_web_config, use
 app = FastAPI(title="네이버 플레이스 순위 트래커")
 templates = Jinja2Templates(directory="templates")
 scheduler = AsyncIOScheduler(timezone="Asia/Seoul")
-APP_VERSION = "check-1330-limits-20260708"
+APP_VERSION = "skip-already-checked-20260708"
 ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "djmonnar4@gmail.com").strip().lower()
 MANUAL_CHECK_LIMIT_PER_DAY = int(os.environ.get("MANUAL_CHECK_LIMIT_PER_DAY", "3"))
 # 이 일수 이상 로그인하지 않은 사용자는 매일 자동 체크에서 제외 (수동 체크는 가능)
@@ -668,10 +668,13 @@ async def _run_rank_check_job(user_id: str, source: str = "manual") -> None:
 
     summary = summary or {}
     rankings_saved = int(summary.get("rankings_saved") or 0)
+    skipped = int(summary.get("skipped_already_checked") or 0)
     failed_keywords = list(summary.get("failed_keywords") or [])
     if rankings_saved > 0 and not failed_keywords:
         state = "done"
         message = f"순위 체크 완료: {rankings_saved}건 저장"
+        if skipped:
+            message += f" (오늘 이미 체크된 {skipped}건 제외)"
     elif rankings_saved > 0:
         state = "done"
         message = (
@@ -684,6 +687,9 @@ async def _run_rank_check_job(user_id: str, source: str = "manual") -> None:
             "네이버 검색 결과를 수집하지 못해 순위를 저장하지 않았습니다. "
             "잠시 후 다시 시도해주세요."
         )
+    elif skipped:
+        state = "done"
+        message = "오늘 체크는 이미 완료되어 있습니다. (중복 체크 안 함)"
     else:
         state = "empty"
         message = "순위 체크 완료: 저장된 순위가 없습니다."

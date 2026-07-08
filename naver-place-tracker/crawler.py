@@ -700,6 +700,7 @@ async def run_daily_check(user_id: str | None = None):
         "keywords": 0,
         "rankings_saved": 0,
         "keyword_results_saved": 0,
+        "skipped_already_checked": 0,
         "failed_keywords": [],
     }
 
@@ -727,10 +728,31 @@ async def run_daily_check(user_id: str | None = None):
         for pair in place_keyword_pairs:
             pairs_by_keyword.setdefault(pair["keyword"], []).append(pair)
 
+        # 오늘 이미 체크한 조합은 (즉시 체크를 돌려도) 다시 크롤링/저장하지 않는다.
+        checked_today = await database.get_checked_pairs_for_date(owner_uid, today)
+
         unique_keywords = list(pairs_by_keyword.keys())
         total_keywords = len(unique_keywords)
 
         for keyword_index, keyword in enumerate(unique_keywords, start=1):
+            # 이 키워드에서 오늘 아직 체크하지 않은 플레이스만 대상으로 남긴다.
+            pending_pairs = [
+                pair for pair in pairs_by_keyword[keyword]
+                if (pair["place"]["place_id"], keyword) not in checked_today
+            ]
+            skipped = len(pairs_by_keyword[keyword]) - len(pending_pairs)
+            summary["skipped_already_checked"] += skipped
+
+            if not pending_pairs:
+                # 이 키워드의 모든 플레이스가 오늘 이미 체크됨 → 크롤링 자체를 건너뜀
+                print(f"  ⏭️ [{keyword}] 오늘 이미 체크됨 — 건너뜀")
+                await _set_check_progress(
+                    owner_uid,
+                    f"{keyword} 오늘 이미 체크됨 — 건너뜀 ({keyword_index}/{total_keywords})",
+                    {"current_keyword": keyword, "keyword_index": keyword_index, "keyword_total": total_keywords},
+                )
+                continue
+
             await _set_check_progress(
                 owner_uid,
                 f"{keyword} TOP {TOP_LIST_LIMIT} 수집 중 ({keyword_index}/{total_keywords})",
@@ -759,7 +781,7 @@ async def run_daily_check(user_id: str | None = None):
             summary["keyword_results_saved"] += len(keyword_results)
             rank_by_place_id, rank_by_name = _build_rank_indexes(keyword_results)
 
-            for pair in pairs_by_keyword[keyword]:
+            for pair in pending_pairs:
                 place = pair["place"]
                 place_id = place["place_id"]
                 place_name = place["place_name"]
