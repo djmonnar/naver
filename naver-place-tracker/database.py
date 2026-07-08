@@ -29,7 +29,9 @@ def _keyword_doc_id(keyword: str) -> str:
 
 async def init_db():
     if uses_firestore():
-        await asyncio.to_thread(get_admin_app)
+        # Defer Firebase Admin initialization until an authenticated request or
+        # crawler run. This keeps /ping and diagnostics alive even when a Render
+        # environment variable is malformed.
         return
 
     async with aiosqlite.connect(DB_PATH) as db:
