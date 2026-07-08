@@ -108,6 +108,34 @@
 
     .auth-message.error { color: var(--red); }
 
+    .inapp-guide {
+      margin-top: 16px;
+      padding: 14px 16px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--soft);
+      color: var(--text);
+      font-size: 13px;
+      line-height: 1.6;
+      text-align: left;
+    }
+    .inapp-guide strong { color: var(--blue); }
+    .inapp-guide .inapp-steps { margin: 8px 0 0; padding-left: 18px; color: var(--muted); }
+    .inapp-guide .inapp-steps li { margin: 2px 0; }
+    .inapp-open-btn {
+      display: block;
+      width: 100%;
+      margin-top: 12px;
+      padding: 12px 14px;
+      border: none;
+      border-radius: 12px;
+      background: var(--blue);
+      color: #fff;
+      font-size: 15px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
     .profile-screen {
       min-height: 100vh;
       display: grid;
@@ -799,6 +827,15 @@
         Google로 시작하기
       </button>
       <div id="authMessage" class="auth-message"></div>
+      <div id="inappGuide" class="inapp-guide hidden">
+        <strong>카카오톡·인앱 브라우저에서는 구글 로그인이 차단됩니다.</strong>
+        <div id="inappGuideText" style="margin-top:6px;">아래 버튼으로 크롬·사파리 같은 기본 브라우저에서 열어주세요.</div>
+        <button id="inappOpenBtn" class="inapp-open-btn" type="button">기본 브라우저로 열기</button>
+        <ul class="inapp-steps">
+          <li>버튼이 안 되면 우측 상단 <strong>⋮ / 공유</strong> 메뉴를 누르고</li>
+          <li><strong>다른 브라우저로 열기</strong>를 선택하세요.</li>
+        </ul>
+      </div>
     </div>
   </section>
 
@@ -1058,7 +1095,67 @@
     const $ = (id) => document.getElementById(id);
     let rankChart = null;
 
-    $("googleLoginBtn").addEventListener("click", signInWithGoogle);
+    // ── 인앱 브라우저 감지 (구글 로그인 차단 우회) ──────────────
+    // 오탐을 막기 위해 명확한 앱 시그니처만 인앱 브라우저로 판정한다.
+    // (일반 웹뷰 추정은 정상 브라우저를 잘못 막을 수 있어 제외)
+    function detectInAppBrowser() {
+      const ua = (navigator.userAgent || "").toLowerCase();
+      if (ua.includes("kakaotalk")) return "kakaotalk";
+      if (ua.includes("naver(inapp")) return "naver";
+      if (ua.includes("instagram")) return "instagram";
+      if (ua.includes("fban") || ua.includes("fbav") || ua.includes("fb_iab")) return "facebook";
+      if (ua.includes("line/")) return "line";
+      if (ua.includes("daumapps")) return "daum";
+      return "";
+    }
+
+    function openInExternalBrowser(kind) {
+      const target = window.location.href;
+      if (kind === "kakaotalk") {
+        // 카카오톡 공식 스킴: 기본 브라우저로 현재 URL 열기
+        window.location.href = "kakaotalk://web/openExternal?url=" + encodeURIComponent(target);
+        return true;
+      }
+      if (kind === "line") {
+        // 라인: URL 끝에 openExternalBrowser=1 붙이면 외부 브라우저로 열림
+        const sep = target.includes("?") ? "&" : "?";
+        window.location.href = target + sep + "openExternalBrowser=1";
+        return true;
+      }
+      return false; // 그 외 인앱 브라우저는 수동 안내만
+    }
+
+    // 인앱 브라우저면 로그인 버튼을 외부 브라우저 열기로 대체하고 true 반환.
+    function setupInAppBrowserGuard() {
+      const kind = detectInAppBrowser();
+      if (!kind) return false;
+
+      const guideText = $("inappGuideText");
+      const openBtn = $("inappOpenBtn");
+      const canAutoOpen = kind === "kakaotalk" || kind === "line";
+
+      $("inappGuide").classList.remove("hidden");
+      if (canAutoOpen) {
+        openBtn.addEventListener("click", () => openInExternalBrowser(kind));
+      } else {
+        // 자동 전환이 안 되는 인앱 브라우저 — 수동 안내만 노출
+        guideText.textContent = "우측 상단 메뉴에서 '다른 브라우저로 열기'를 눌러 크롬·사파리에서 접속해주세요.";
+        openBtn.classList.add("hidden");
+      }
+
+      // 로그인 버튼을 눌러도 인앱에선 막히므로, 외부 브라우저 열기로 유도
+      $("googleLoginBtn").addEventListener("click", () => {
+        if (!openInExternalBrowser(kind)) {
+          $("authMessage").textContent = "인앱 브라우저에서는 로그인할 수 없어요. 위 안내대로 기본 브라우저에서 열어주세요.";
+          $("authMessage").className = "auth-message error";
+        }
+      });
+      return true;
+    }
+
+    if (!setupInAppBrowserGuard()) {
+      $("googleLoginBtn").addEventListener("click", signInWithGoogle);
+    }
     $("logoutBtn").addEventListener("click", () => signOut(auth));
     $("profileLogoutBtn").addEventListener("click", () => signOut(auth));
     $("memberProfileForm").addEventListener("submit", saveMemberProfile);
