@@ -156,18 +156,19 @@ async def _rank_check_worker() -> None:
         item = await queue.get()
         user_id = str(item.get("user_id") or "")
         source = str(item.get("source") or "manual")
+        force = bool(item.get("force"))
         if user_id:
             QUEUED_RANK_CHECK_USERS.discard(user_id)
         try:
             if user_id:
-                await _run_rank_check_job(user_id, source)
+                await _run_rank_check_job(user_id, source, force)
         except Exception as exc:
             print(f"순위 체크 워커 오류 [{user_id}]: {exc}")
         finally:
             queue.task_done()
 
 
-async def _enqueue_rank_check(user_id: str, source: str = "manual") -> dict:
+async def _enqueue_rank_check(user_id: str, source: str = "manual", force: bool = False) -> dict:
     queue = _rank_check_queue()
     _ensure_rank_check_worker()
 
@@ -194,7 +195,7 @@ async def _enqueue_rank_check(user_id: str, source: str = "manual") -> dict:
         message,
         {"queue_position": position, "source": source},
     )
-    await queue.put({"user_id": user_id, "source": source})
+    await queue.put({"user_id": user_id, "source": source, "force": force})
     return {"status": "queued", "message": message, "queue_position": position}
 
 
@@ -619,6 +620,10 @@ async def del_keyword(request: Request, keyword: str = Form(...), place_id: str 
     suffix = f"?place_id={target_place_id}" if target_place_id else ""
     return RedirectResponse(f"/{suffix}", status_code=303)
 
+def _wants_force(request: Request) -> bool:
+    return str(request.query_params.get("force", "")).lower() in ("1", "true", "yes", "on")
+
+
 @app.post("/check/now")
 async def check_now(request: Request):
     request_user = auth.get_request_user(request)
@@ -629,7 +634,7 @@ async def check_now(request: Request):
         and user_id not in QUEUED_RANK_CHECK_USERS
     ):
         await _consume_manual_check_quota_or_raise(user_id)
-    result = await _enqueue_rank_check(user_id, "manual")
+    result = await _enqueue_rank_check(user_id, "manual", _wants_force(request))
     return JSONResponse({
         **result,
         "data_backend": get_data_backend(),
@@ -637,7 +642,7 @@ async def check_now(request: Request):
     })
 
 
-async def _run_rank_check_job(user_id: str, source: str = "manual") -> None:
+async def _run_rank_check_job(user_id: str, source: str = "manual", force: bool = False) -> None:
     if user_id in RUNNING_RANK_CHECKS:
         await database.set_check_status(
             user_id,
@@ -652,9 +657,9 @@ async def _run_rank_check_job(user_id: str, source: str = "manual") -> None:
             user_id,
             "running",
             "Render 서버에서 순위 체크 중입니다.",
-            {"source": source},
+            {"source": source, "force": force},
         )
-        summary = await crawler.run_daily_check(user_id)
+        summary = await crawler.run_daily_check(user_id, force=force)
     except Exception as exc:
         await database.set_check_status(
             user_id,
@@ -734,7 +739,7 @@ async def api_check_now(request: Request):
     ):
         await _consume_manual_check_quota_or_raise(user["uid"])
 
-    result = await _enqueue_rank_check(user["uid"], "manual")
+    result = await _enqueue_rank_check(user["uid"], "manual", _wants_force(request))
     return JSONResponse({
         **result,
         "data_backend": get_data_backend(),

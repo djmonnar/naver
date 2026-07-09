@@ -700,7 +700,9 @@ def _build_place_keyword_pairs(places: list[dict], keywords: list[dict]) -> list
     return pairs
 
 
-async def run_daily_check(user_id: str | None = None):
+async def run_daily_check(user_id: str | None = None, force: bool = False):
+    # force=True면 "오늘 이미 체크됨" 스킵을 무시하고 전 키워드를 다시 크롤링한다.
+    # (크롤러 로직 수정 후 오늘치 목록을 새로 덮어쓰고 싶을 때 사용)
     # 날짜는 KST 기준으로 기록 (서버가 UTC여도 한국 날짜로 저장)
     today = _now_kst().strftime("%Y-%m-%d")
     user_ids = [user_id] if user_id else await database.list_user_ids()
@@ -741,7 +743,8 @@ async def run_daily_check(user_id: str | None = None):
             pairs_by_keyword.setdefault(pair["keyword"], []).append(pair)
 
         # 오늘 이미 체크한 조합은 (즉시 체크를 돌려도) 다시 크롤링/저장하지 않는다.
-        checked_today = await database.get_checked_pairs_for_date(owner_uid, today)
+        # force면 이 스킵을 끄고 전부 다시 수집한다.
+        checked_today = set() if force else await database.get_checked_pairs_for_date(owner_uid, today)
 
         unique_keywords = list(pairs_by_keyword.keys())
         total_keywords = len(unique_keywords)

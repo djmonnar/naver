@@ -699,7 +699,10 @@
   <section class="card">
     <div class="card-head">
       <h2 class="card-title">현재 순위</h2>
-      <button class="primary-button" id="checkBtn" type="button" onclick="runCheck()">지금 체크</button>
+      <div style="display:flex; gap:8px; align-items:center;">
+        <button class="text-button" id="forceCheckBtn" type="button" onclick="runCheck(true)" title="오늘 이미 체크한 키워드도 목록을 다시 수집해 업체명을 갱신합니다">강제 재수집</button>
+        <button class="primary-button" id="checkBtn" type="button" onclick="runCheck()">지금 체크</button>
+      </div>
     </div>
     {% if latest %}
     <div class="current-list">
@@ -889,19 +892,23 @@ document.querySelectorAll('.segment button').forEach(button => {
 
 drawChart('7');
 
-async function runCheck() {
+async function runCheck(force = false) {
   const btn = document.getElementById('checkBtn');
+  const forceBtn = document.getElementById('forceCheckBtn');
   btn.disabled = true;
-  btn.textContent = '체크 중';
+  if (forceBtn) forceBtn.disabled = true;
+  btn.textContent = force ? '재수집 중' : '체크 중';
 
   try {
-    const res = await fetch('/check/now', { method: 'POST' });
+    const url = force ? '/check/now?force=1' : '/check/now';
+    const res = await fetch(url, { method: 'POST' });
     const data = await res.json();
     showToast(data.message || '순위 체크를 시작했습니다.');
     setTimeout(() => location.reload(), 15000);
   } catch (error) {
     showToast('체크 요청에 실패했습니다.');
     btn.disabled = false;
+    if (forceBtn) forceBtn.disabled = false;
     btn.textContent = '지금 체크';
   }
 }
