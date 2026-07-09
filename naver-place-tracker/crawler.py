@@ -49,6 +49,7 @@ _PLACE_NAME_NOISE_PHRASES = [
     "네이버예약",
     "방문자리뷰",
     "블로그리뷰",
+    "이미지수",
     "예약",
     "저장",
     "공유",
@@ -224,23 +225,25 @@ async def _extract_dom_results(frame, limit: int) -> list[dict]:
 
         place_name = await item.evaluate("""
             (el) => {
+                // 상호명이 아닌 라벨(사진 개수·리뷰 수·거리·버튼 등)을 걸러낸다.
+                const NOISE = /(광고|방문자리뷰|블로그리뷰|이미지수|쿠폰|톡톡|길찾기|저장|공유|예약)/;
+                const isNoise = (t) => !t || t.length < 2 || NOISE.test(t)
+                    || /^\\d+(\\.\\d+)?\\s*(m|km|개|장|명)?$/.test(t);
                 const selectors = [
                     'a.place_bluelink span',
                     'span.TYaxT',
                     'span.Fc1rA',
                     'span.YwYLL',
-                    'strong',
-                    'a'
+                    'strong'
                 ];
                 for (const selector of selectors) {
-                    const target = el.querySelector(selector);
-                    const text = target?.textContent?.trim();
-                    if (text && text.length > 1 && !text.includes('광고')) return text;
+                    const text = el.querySelector(selector)?.textContent?.trim();
+                    if (!isNoise(text)) return text;
                 }
                 return (el.innerText || '')
                     .split('\\n')
                     .map((line) => line.trim())
-                    .find((line) => line && !line.includes('광고') && !line.includes('방문자리뷰')) || '';
+                    .find((line) => !isNoise(line)) || '';
             }
         """)
 
@@ -440,6 +443,9 @@ async def _extract_place_candidate_meta(item) -> dict:
                 .split("\\n")
                 .map((line) => line.trim())
                 .filter(Boolean);
+            const NOISE = /(광고|방문자리뷰|블로그리뷰|이미지수|쿠폰|톡톡|길찾기|저장|공유|예약)/;
+            const isNoise = (t) => !t || t.length < 2 || NOISE.test(t)
+                || /^\\d+(\\.\\d+)?\\s*(m|km|개|장|명)?$/.test(t);
             const name = [
                 "a.place_bluelink span",
                 "span.TYaxT",
@@ -447,7 +453,7 @@ async def _extract_place_candidate_meta(item) -> dict:
                 "span.YwYLL",
                 "strong",
                 "a.U70Fj"
-            ].map(textOf).find((value) => value && value.length > 1) || "";
+            ].map(textOf).find((value) => !isNoise(value)) || "";
             const category = textOf("span.YzBgS");
             const address = lines.find((line) =>
                 /^(서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|전북|전남|경북|경남|제주)\\s/.test(line)
